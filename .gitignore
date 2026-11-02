@@ -1,0 +1,16 @@
+# 外部/可重建产物，不进版本库
+.agents/
+node_modules/
+package-lock.json
+
+# 运行时与临时文件
+*.log
+*.tmp
+.DS_Store
+
+# 本地密钥（不随仓库分发）
+local.secrets.json
+
+# 演示页面（npm run preview 生成）
+docs/card-preview.html
+docs/capsule-preview.html

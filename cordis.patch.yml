@@ -1,0 +1,5 @@
+# 注册 TeleAgent provider，不改变 profile 的默认模型。
+# 插件复用 TeleAgent 桌面端已有的登录态，不再单独走 OAuth。
+- insert:
+    - id: dsh-connect-teleagent
+      name: dsh-connect-teleagent
