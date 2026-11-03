@@ -1,0 +1,76 @@
+{
+  "format": 1,
+  "title": {
+    "en": "TeleAgent Models",
+    "zh": "TeleAgent 模型"
+  },
+  "description": {
+    "en": "Use the locally logged-in TeleAgent (China Telecom AI desktop app) models inside DeepSeek Harness: native kernel traffic, streaming, multi-turn, images, tools, reasoning, credits.",
+    "zh": "把本机登录的 TeleAgent（天翼 AI 星辰超级智能体桌面端）模型接入 DeepSeek Harness：原生内核流量、真流式、多轮、图片、工具调用、思维链、积分。"
+  },
+  "metadata": {
+    "categories": {
+      "models": {
+        "title": {
+          "en": "Models & Providers",
+          "zh": "模型与订阅"
+        }
+      }
+    },
+    "labels": {
+      "native": {
+        "title": {
+          "en": "Native client traffic",
+          "zh": "原生客户端流量"
+        }
+      }
+    }
+  },
+  "plugins": [
+    {
+      "name": "dsh-connect-teleagent",
+      "title": {
+        "en": "TeleAgent Models",
+        "zh": "TeleAgent 模型"
+      },
+      "description": {
+        "en": "Connect DeepSeek Harness to the TeleAgent desktop app's models through its own Go kernel; keeps DSH's tools, multi-turn and streaming.",
+        "zh": "经 TeleAgent 自己的 Go 内核把桌面端 5 个模型接进 DSH，保留 DSH 的工具、多轮与流式。"
+      },
+      "icon": "../icon.png",
+      "author": "anbulang",
+      "homepage": "https://github.com/anbulang/dsh-connect-teleagent",
+      "repository": {
+        "url": "https://github.com/anbulang/dsh-connect-teleagent"
+      },
+      "metadata": {
+        "category": "models",
+        "labels": [
+          "native"
+        ],
+        "keywords": [
+          "teleagent",
+          "deepseek-harness",
+          "model-provider",
+          "openai-compatible",
+          "reasoning",
+          "credits"
+        ]
+      },
+      "versions": [
+        {
+          "version": "0.11.0",
+          "publishTimestamp": 1793666830,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/anbulang/dsh-connect-teleagent",
+            "commit": "14a9dfbb97c9833da4147275d26f189b1a702126"
+          },
+          "engines": {
+            "dsh": ">=0.2.1-rc.1 <0.3.0-0"
+          }
+        }
+      ]
+    }
+  ]
+}
