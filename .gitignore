@@ -14,3 +14,6 @@ local.secrets.json
 # 演示页面（npm run preview 生成）
 docs/card-preview.html
 docs/capsule-preview.html
+
+# 发布产物
+*.tgz
