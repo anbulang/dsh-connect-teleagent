@@ -55,6 +55,28 @@ bash scripts/install.sh
 bash scripts/uninstall.sh
 ```
 
+## 发布与订阅（插件索引）
+
+本插件不依赖 npm 发布：DSH 支持用 **format-1 插件索引**分发。仓库自带
+`market/index.json`，可直接在 DSH 里订阅：
+
+1. 打开 **插件** → **实验性插件** 旁的 **更多** → 开启 **自定义插件市场**
+2. 进入 **发现** → **添加索引源**，填写：
+
+   ```text
+   https://raw.githubusercontent.com/anbulang/dsh-connect-teleagent/main/market/index.json
+   ```
+
+3. 在市场下拉菜单里选择 **dsh-connect-teleagent** 即可查看并安装。
+
+也可以直接用包管理器安装（不需要索引）：
+
+```bash
+dsh plugin --profile web add github:anbulang/dsh-connect-teleagent
+```
+
+上游 apiKey 仍需按上一节在本机配置。
+
 ## 工作原理
 
 ```
