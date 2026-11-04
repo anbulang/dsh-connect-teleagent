@@ -6,6 +6,37 @@
 
 ---
 
+## 0.11.3 — 2026-11-05
+
+### 修复：带图请求报 `Image request width must be a positive integer.`
+
+**现象**：v0.11.1 接上持久附件服务后，图片能进入 pi-ai，但请求在本地失败：
+
+```text
+本轮运行失败
+Image request width must be a positive integer.
+```
+
+**根因**：插件是**手动构造** pi-ai profile（不经过 `@deepseek-ai/dsh-llm-pi-ai` 的
+Config schema），所以 schema 里的 `.default()` 不会生效。profile 缺少：
+
+- `requestImagePixelBudget`（默认 2048×2048）
+- `requestImageMaxBytes`（默认 1 MiB）
+- `maxRequestImageBytes`（默认 20 MiB）
+
+`imageRequestTarget()` 拿 `undefined` 去算 `requestImageDimensions(width, height, undefined)`，
+得到非正整数宽高；`@deepseek-ai/dsh-attachment-local` 的 `checkedInteger` 随即抛出上述错误。
+
+**修法**（`lib/image-budget.js` / `lib/index.js`）
+
+- 新增 `IMAGE_REQUEST_BUDGET`：与官方 profile 默认值一致的三项预算
+- 构造 profile 时展开这三个字段
+
+**验证**：新增 2 项单测（数值等于官方默认、均为正整数、像素预算/字节预算关系）；
+`npm test` 233 全绿，`npm run verify` 6 套件全绿。
+
+---
+
 ## 0.11.2 — 2026-11-04
 
 ### 修复：一轮里过程文本被拼成“没有换行的长墙”；内核私自执行自带工具
