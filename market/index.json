@@ -59,12 +59,12 @@
       },
       "versions": [
         {
-          "version": "0.11.2",
-          "publishTimestamp": 1793762062,
+          "version": "0.11.3",
+          "publishTimestamp": 1793811656,
           "source": {
             "type": "git",
             "url": "https://github.com/anbulang/dsh-connect-teleagent",
-            "commit": "a4a0e3aac9a1a7325d0d8e1038ba2cee2ab4a46b"
+            "commit": "e0ea81e1fe8fff91923ecf4f003af6ff0d5b4712"
           },
           "engines": {
             "dsh": ">=0.2.1-rc.1 <0.3.0-0"
