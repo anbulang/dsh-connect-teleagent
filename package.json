@@ -1,6 +1,6 @@
 {
   "name": "dsh-connect-teleagent",
-  "version": "0.11.1",
+  "version": "0.11.2",
   "description": "把本机登录的 TeleAgent（天翼 AI 星辰超级智能体桌面端）模型接入 DeepSeek Harness：原生内核流量 + 真流式 + 多轮 + 图片 + 工具调用 + 思维链 + 积分。",
   "type": "module",
   "main": "lib/index.js",
