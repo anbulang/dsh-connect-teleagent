@@ -6,6 +6,35 @@
 
 ---
 
+## 0.11.1 — 2026-11-04
+
+### 修复：图片输入不可用（`UNSUPPORTED_CONTENT`）
+
+**现象**：选中支持视觉的 TeleAgent 模型时，只要消息带图片，本轮就失败：
+
+```text
+pi-ai image input requires the durable attachment service
+code: UNSUPPORTED_CONTENT
+```
+
+**根因**：插件构造 `PiAiAdapter` 时只传了 `profiles / auth / resolveApiKey`，
+没有像官方 `dsh-llm-pi-ai` / `dsh-llm-deepseek` 那样透传宿主的**持久附件服务**
+（`resolveAttachments` / `resolveImageAccess`）。pi-ai 适配器在发请求前检查到
+图片却没有该服务，就直接拒绝，上游根本收不到请求。
+
+**修法**（`lib/attachments.js` / `lib/index.js`）
+
+- 新增 `createAttachmentDeps(ctx, resolveImageAttachmentAccess)`：
+  - `resolveAttachments: () => ctx.get('attachments')`
+  - `resolveImageAccess`: 用 `ctx.get('fs')?.processPathFromHostPath` 映射宿主路径后交给
+    `@deepseek-ai/dsh-llm` 的 `resolveImageAttachmentAccess`
+- 构造 `PiAiAdapter` 时展开这两个依赖；没有附件服务的精简 profile 仍保持原行为（软探测）
+
+**验证**：新增 4 项单测（服务透传、路径映射、缺失服务降级、ctx.get 抛错降级）；
+`npm test` 231 全绿，`npm run verify` 6 套件全绿。
+
+---
+
 ## 0.11.0 — 2026-11-02
 
 ### 开源发布
