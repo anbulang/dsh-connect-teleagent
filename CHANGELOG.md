@@ -6,6 +6,40 @@
 
 ---
 
+## 0.11.2 — 2026-11-04
+
+### 修复：一轮里过程文本被拼成“没有换行的长墙”；内核私自执行自带工具
+
+**现象**：带工具的回合里，DSH 的一条 assistant 消息会出现多段过程文字连在一起、没有
+分隔/换行（参考会话 `下载两本电子书` 的截图），并且这些步骤在 DSH 里看不到对应的工具卡片。
+
+**日志实证**：会话里一条 DSH assistant 消息的 697 字文本，实际是内核 **9 条** assistant
+消息的 text 拼接（`iFZ6y1` 109 + `4oVFEw` 63 + `K4rKhy` 92 + `H2XxI7` 51 + `vthPHg` 52 +
+`yqb5Z4` 70 + `5fB3ya` 38 + `HwaIap` 46 + `lvbE2R` 176 = 697），时间跨 16:25:24–16:29:41；
+这些步骤的工具是内核自带的 `bash`（`tool=bash status=completed`），不是 DSH 的 `dsh_bash`。
+
+**根因**：
+
+1. 内核在一次 `prompt_async` 里用自带工具跑完了多个 agent 步骤（内置 `bash` 等），
+   这些步骤不会暂停回 DSH，插件只能把中间每条内核消息的 text 顺序拼进同一个响应；
+2. 插件此前靠 prompt body 的 `tools: {id:false}` 关闭内置工具，但**当前内核版本不再
+   按这个开关阻止执行**——真内核探针里把所有内置工具置 false，`bash` 仍然被执行。
+
+**修法**（`lib/index.js`）
+
+- `startKernel` 默认传 `denyBuiltinTools: true`：用 permission deny 掉全部内核自带工具，
+  只保留挂进内核的 MCP/DSH 工具；`config.denyBuiltinTools === false` 可显式回退
+- 这样工具调用一律经 DSH 执行（有卡片、有审批/权限），同一条 DSH 响应只对应一个内核步骤，
+  不会再出现多段文本拼接
+
+**验证**
+
+- 真内核 + 假上游探针：带 `denyBuiltinTools: true` 时模型请求内置 `bash` 不再执行；
+  不带时仍会执行（复现原 bug）
+- `npm test` 231 全绿，`npm run verify` 6 套件全绿
+
+---
+
 ## 0.11.1 — 2026-11-04
 
 ### 修复：图片输入不可用（`UNSUPPORTED_CONTENT`）
