@@ -1,64 +1,61 @@
-# dsh-connect-teleagent
+<p align="center">
+  <a href="https://github.com/anbulang/dsh-connect-teleagent/releases/latest"><img alt="release" src="https://img.shields.io/github/v/release/anbulang/dsh-connect-teleagent?label=release&color=2ea44f"></a>
+  <a href="https://github.com/anbulang/dsh-connect-teleagent/blob/main/package.json"><img alt="version" src="https://img.shields.io/badge/version-0.11.4-blue"></a>
+  <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-purple"></a>
+  <a href="https://github.com/anbulang/dsh-connect-teleagent"><img alt="platform" src="https://img.shields.io/badge/platform-macOS-lightgrey"></a>
+  <a href="https://github.com/anbulang/dsh-connect-teleagent"><img alt="dsh" src="https://img.shields.io/badge/DSH-0.2.1--rc.1%2B-orange"></a>
+  <a href="https://github.com/anbulang/dsh-connect-teleagent"><img alt="index" src="https://img.shields.io/badge/index-format--1-blueviolet"></a>
+  <a href="https://github.com/anbulang/dsh-connect-teleagent"><img alt="tests" src="https://img.shields.io/badge/tests-233%20passing-brightgreen"></a>
+  <a href="https://github.com/anbulang/dsh-connect-teleagent/stargazers"><img alt="stars" src="https://img.shields.io/github/stars/anbulang/dsh-connect-teleagent?style=social"></a>
+</p>
 
-把本机登录的 **[TeleAgent](https://www.teleai.com.cn)**（天翼 AI 星辰超级智能体桌面版）的模型接入 **DeepSeek Harness** 模型选择器。
+<h1 align="center">dsh-connect-teleagent</h1>
 
-复用桌面端已有登录态；上游网关的 apiKey 需按下面「上游 apiKey」一节在本机配置。
+<p align="center">
+  把本机登录的 <b>TeleAgent</b>（天翼 AI 星辰超级智能体桌面端）模型接入 <b>DeepSeek Harness</b>。
+  <br>
+  <b>简体中文</b> · <a href="README_EN.md">English</a>
+</p>
 
-插件**直连 TeleAgent 上游**（标准 OpenAI 兼容接口），不经过 TeleAgent 的 agent 运行时。
-因此 `messages` 的 role 结构、多轮历史、`tools`/`tool_calls` 全部原样保留，由 DSH 掌控。
+---
+
+复用桌面端已有登录态，**不需要单独注册账号**；默认经由 TeleAgent 自己的 Go 内核发请求，
+保留 DSH 的 role 结构、多轮历史、工具调用与流式体验。
+
+## ✨ 特性
+
+- **5 个官方模型**：智能 / 旗舰 / 极速 / 轻量 / 轻速（含图片输入与积分倍率展示）
+- **原生内核流量**：默认走 TeleAgent 自己的内核（解密登录态、自己加签），不是伪造请求
+- **真流式**：SSE 按字节转发，`reasoning_content` 思维链可在 DSH 里折叠查看
+- **工具桥（MCP）**：DSH 的工具透传给模型，调用由 DSH 执行（有卡片、有权限）
+- **图片输入**：`chat-pro` / `chat-flash` 支持，走本机持久附件服务
+- **积分**：余额展示 + 每日自动领取（幂等），设置卡片与输入框胶囊
+- **可订阅**：自带 format-1 插件索引，DSH「发现」页一键添加
+- **防突发**：并发上限 + 认证失败熔断，避免误触上游风控
 
 ## 模型
 
-| modelID | 名称 | 上下文 | 输出 | 积分倍率 |
-|---|---|---|---|---|
-| `chat-pro` | 智能 | 400K | 65536 | x0.6 |
-| `chat-flagship` | 旗舰 | 400K | 65536 | x1.0 |
-| `chat-flash` | 极速 | 400K | 65536 | x0.2 |
-| `chat-lite` | 轻量 | 100K | 65536 | x0.5 |
-| `chat-nano` | 轻速 | 100K | 65536 | x0.1 |
+| modelID | 名称 | 上下文 | 输出 | 图片 | 积分倍率 |
+|---|---|---|---|---|---|
+| `chat-pro` | 智能 | 400K | 65536 | ✅ | x0.6 |
+| `chat-flagship` | 旗舰 | 400K | 65536 | ❌ | x1.0 |
+| `chat-flash` | 极速 | 400K | 65536 | ✅ | x0.2 |
+| `chat-lite` | 轻量 | 100K | 65536 | ❌ | x0.5 |
+| `chat-nano` | 轻速 | 100K | 65536 | ❌ | x0.1 |
 
-在 DSH 里显示为 `智能 · x0.6` 这样，倍率来自 TeleAgent 自己的目录。
+在 DSH 里显示为 `智能 · x0.6`，倍率来自 TeleAgent 自己的目录。
 
 ## 前置条件
 
-1. macOS 已安装并**登录** TeleAgent 桌面版（`/Applications/TeleAgent.app`）
-2. DSH 版本与 `dsh-connect-workbuddy` 相同代际（peer 依赖满足）
+1. macOS 已安装并**登录** TeleAgent 桌面版（`/Applications/TeleAgent.app`，桌面端只有 macOS）
+2. DeepSeek Harness **0.2.1-rc.1+**（能打开「插件 → 发现」即可）
+3. 按下面「上游 apiKey」在本机配置网关 apiKey
 
-未登录时插件会在日志里报「TeleAgent 尚未登录」，卡片上会给出「去登录」按钮。
-登录完成后**不需要重启 DSH**：插件会自动重建上游客户端。
+未登录时插件会提示「TeleAgent 尚未登录」；登录完成后**不需要重启 DSH**，凭据变更会自动生效。
 
 ## 安装
 
-```bash
-bash scripts/install.sh
-```
-
-然后**完全退出并重启 DeepSeek Harness**。重启后在「设置 → 模型」里应能看到 TeleAgent 的 5 个模型。
-
-### 上游 apiKey
-
-插件请求上游时需要一个网关 apiKey（TeleAgent 桌面端内置的常量）。**仓库不提交真实值**，
-按以下任一方式在本机配置：
-
-1. 环境变量：`export TELEAGENT_API_KEY=sk-...`
-2. 仓库根目录 `local.secrets.json`（已 gitignore）：
-
-   ```json
-   { "apiKey": "sk-..." }
-   ```
-
-两者都没有时，插件会在日志/卡片里提示「未配置上游 apiKey」。
-
-卸载：
-
-```bash
-bash scripts/uninstall.sh
-```
-
-## 发布与订阅（插件索引）
-
-本插件不依赖 npm 发布：DSH 支持用 **format-1 插件索引**分发。仓库自带
-`market/index.json`，可直接在 DSH 里订阅：
+### 方式 A：DSH 插件索引（推荐）
 
 1. 打开 **插件** → **实验性插件** 旁的 **更多** → 开启 **自定义插件市场**
 2. 进入 **发现** → **添加索引源**，填写：
@@ -67,235 +64,154 @@ bash scripts/uninstall.sh
    https://raw.githubusercontent.com/anbulang/dsh-connect-teleagent/main/market/index.json
    ```
 
-3. 在市场下拉菜单里选择 **dsh-connect-teleagent** 即可查看并安装。
+3. 在市场下拉里选择 **dsh-connect-teleagent**，安装后重启 DSH
 
-也可以直接用包管理器安装（不需要索引）：
+### 方式 B：包管理器直装
 
 ```bash
 dsh plugin --profile web add github:anbulang/dsh-connect-teleagent
 ```
 
-上游 apiKey 仍需按上一节在本机配置。
+### 方式 C：Release 离线包
+
+从 [Releases](https://github.com/anbulang/dsh-connect-teleagent/releases/latest) 下载
+`dsh-connect-teleagent-<version>.tgz`，解压到 `~/.dsh/plugins/dsh-connect-teleagent/`，
+或用仓库里的安装脚本：
+
+```bash
+bash scripts/install.sh      # 复制到 ~/.dsh/plugins 并写入 profile
+bash scripts/uninstall.sh    # 卸载
+```
+
+安装后**完全退出并重启 DeepSeek Harness**；「设置 → 模型」里即可看到 TeleAgent 的 5 个模型。
+
+### 上游 apiKey
+
+插件请求上游时需要一个网关 apiKey（TeleAgent 桌面端内置常量）。**仓库不提交真实值**，
+在本机二选一配置：
+
+1. 环境变量：`export TELEAGENT_API_KEY=sk-...`
+2. 仓库根目录 `local.secrets.json`（已 gitignore）：
+
+   ```json
+   { "apiKey": "sk-..." }
+   ```
+
+都没有时，插件会在日志/卡片里提示「未配置上游 apiKey」。
+
+## 使用
+
+- **模型开关**：设置卡片里取消勾选即从选择器移除，重启后保留
+- **积分**：卡片显示余额与今日领取状态；可关自动领取
+- **换账号**：TeleAgent 桌面端重新登录后，插件按 `token.json` 指纹自动重建客户端（无需重启 DSH）
+- **清除登录态**：卡片两步确认，只删 `token.json`，保留技能/记忆/个人数据
 
 ## 工作原理
 
-```
+默认 **kernel 模式**：插件驱动 TeleAgent 自己的 Go 内核发请求，内核负责解密登录态与签名，
+请求形态是客户端原生流量；`direct` 模式（旧实现）会由插件自己复刻签名直连上游，作为回退保留。
+
+```text
 DSH (pi-ai) ──OpenAI──► loopback shim (127.0.0.1:随机端口)
                               │  透明转发（不改写 messages / tools）
                               ▼
-                    TeleAgent 上游 /superCowork/sapi/api/v1
-                              ▲
-                        请求签名（本地计算）
-                              │
-              token.json（safeStorage） + device-meta.json
+                  TeleAgent kernel (Go, 本机 ~/.dsh-teleagent-kernel)
+                              │  解密登录态 + 原生签名
+                              ▼
+                  TeleAgent 上游 /superCowork/sapi/api/v1
 ```
-
-三个组件：
 
 | 文件 | 职责 |
 |---|---|
-| `lib/upstream.js` | 读凭据、计算签名、直连上游 |
-| `lib/shim.js` | 本地 OpenAI 兼容端点，**纯代理**（role/工具/流式全部透传） |
-| `lib/index.js` | 装配 pi-ai provider 并注册 `teleagent` 路由 |
+| `lib/kernel.js` | 拉起内核、会话/SSE/多轮/图片/工具挂起续跑 |
+| `lib/shim.js` | 本地 OpenAI 兼容端点，纯代理（角色/工具/流式全部透传） |
+| `lib/mcp-bridge.js` | 把 DSH 工具挂进内核 MCP，工具调用仍由 DSH 执行 |
+| `lib/index.js` | 装配 pi-ai provider，注册 `teleagent` 路由 |
+| `lib/upstream.js` | `direct` 回退模式的签名实现（见 [docs/DESIGN.md](docs/DESIGN.md)） |
 
-### 上游签名（逆向所得）
+内核独立运行在 `~/.dsh-teleagent-kernel/`，不碰桌面端数据目录。
 
-上游要求每个请求带一组 `X-Superagent-*` 头，签名是**两步 HMAC-SHA256**：
+## 配置
 
-**第 1 步**（绑定 installId，得到中间密钥 k1）：
-
-```
-key = JWT 第三段                     # token.split(".")[2]
-msg = "superagent-auth-v1/{token}/{installId}/{ts}/{nonce}"
-k1  = hex(HMAC-SHA256(key, msg))
-```
-
-**第 2 步**（请求签名）：
-
-```
-key = k1                             # 作为 64 字符十六进制文本
-msg = "superagent-auth-v1\n{METHOD}\n{pathname}\n{ts}\n{nonce}\n{appVersion}\n{sha256hex(body)}"
-sig = hex(HMAC-SHA256(key, msg))
-```
-
-要点：
-
-- `pathname` 必须包含 `/superCowork/sapi` 前缀（错则 `40104 invalid signature`）
-- `Authorization: Bearer <内置 apiKey>`，**用户 token 走 `X-Token` 头**
-- 每次请求都要新的 `ts`（Unix 秒）+ `nonce`（UUID）
-- body 哈希必须对**实际发出的字节**计算
-
-完整逆向过程见 [`docs/ROADMAP.md`](docs/ROADMAP.md) P8。
-
-### 凭据
-
-| 数据 | 位置 | 处理 |
-|---|---|---|
-| 用户 token | `~/.local/share/TeleAgent/users/<scope>/app-auth/token.json` | safeStorage 加密，用钥匙串 `TeleAgent Safe Storage` 解密（AES-128-CBC，PBKDF2-SHA1 1003 轮） |
-| 设备标识 | `~/.local/share/TeleAgent/app-auth/device-meta.json` | 直接读取 `deviceId` / `installId` |
-| 网关 apiKey | 桌面端内置常量 | 仅随请求头发送 |
-
-token 只存在于插件进程内存与上游请求中，**从不写入 DSH 配置、日志或状态接口**。
-
-## 能力矩阵（均已实测）
-
-| 能力 | 说明 |
-|---|---|
-| **真流式** | 上游 SSE 字节级转发，`[DONE]` 正常结束 |
-| **多轮会话** | 调用方携带完整历史，插件不保存任何会话状态 |
-| **role 透传** | `system` / `user` / `assistant` / `tool` 原样上送 |
-| **工具执行** | `tools` / `tool_calls` 原样透传，由 DSH 执行（无双层执行） |
-| **模型开关** | 卡片里取消勾选即从选择器移除，设置在重启后保留 |
-
-## 传输方式
-
-| 模式 | 说明 |
-|---|---|
-| **kernel（默认）** | 驱动 TeleAgent 自己的 Go 内核发请求：内核解密登录态、自己加签。流量是原生流量 |
-| `direct` | 插件自己复刻签名直连上游（旧实现，保留作回退） |
+设置保存在 `$DSH_HOME/teleagent-plugin.json`（默认 `~/.dsh/teleagent-plugin.json`），
+并可通过 DSH 设置卡片编辑：
 
 ```jsonc
-{ "transport": "kernel" }   // 默认；改 "direct" 可回退
+{
+  "transport": "kernel",          // kernel（默认）或 direct
+  "kernelAllowedTools": [],       // 允许内核额外执行的工具（默认空）
+  "denyBuiltinTools": true,       // 默认禁止内核自带工具，只走 DSH 的 MCP 工具
+  "kernelReadyTimeoutMs": 60000,
+  "enabledModelIds": [],          // 空数组 = 全部启用
+  "guard": { "maxConcurrent": 2, "failureThreshold": 3, "cooldownMs": 600000 }
+}
 ```
 
-配置项：`kernelAllowedTools`（默认空 = 内核不执行任何工具）、
-`kernelReadyTimeoutMs`（默认 60000）、环境变量 `TELEAGENT_KERNEL_PORT`（默认 47823）。
-
-kernel 模式的内核独立运行在 `~/.dsh-teleagent-kernel/`，不碰桌面端数据目录。
+环境变量：`TELEAGENT_KERNEL_PORT`（内核端口，默认 47823）、`TELEAGENT_API_KEY`（上游 apiKey）。
 
 ## 积分
 
 | 项 | 说明 |
 |---|---|
-| **余额** | 设置卡片与输入框胶囊显示，来自 `/meter/super-agent/user/portal/points/detail` |
-| **每日领取** | 默认开启自动领取，每天一次；也可在卡片里手动点「领取」 |
-| **幂等** | 上游 `claimed_today` + 本地 `lastClaimDate` 双重判断，同一天绝不重复领取 |
-| **鉴权** | portal 服务用 cookie + `X-Token`，与聊天网关的签名机制不同（详见 `lib/portal.js` 注释） |
-| **失败影响** | 仅卡片提示，不影响模型可用 |
-
-关闭自动领取：卡片里把「自动领取」开关关掉，或写配置：
-
-```jsonc
-{ "welfare": { "autoClaimDaily": false } }
-```
+| 余额 | 设置卡片与输入框胶囊，来自 `/meter/super-agent/user/portal/points/detail` |
+| 每日领取 | 默认自动领取，每天一次；卡片可手动领取 |
+| 幂等 | 上游 `claimed_today` + 本地 `lastClaimDate` 双重判断 |
+| 失败影响 | 仅卡片提示，不影响模型可用 |
 
 ## 防护
 
 | 机制 | 默认 | 说明 |
 |---|---|---|
 | 并发上限 | 2 | 避免 DSH 并行调用造成突发 |
-| 熔断阈值 | 连续 3 次 401/403 | 达到即暂停 10 分钟，期间请求快速失败 |
+| 熔断阈值 | 连续 3 次 401/403 | 达到即暂停 10 分钟，期间快速失败 |
 | 半开探测 | 1 个 | 冷却后先放一个请求试探 |
 
-可在插件配置里覆盖：
-
-```jsonc
-{ "guard": { "maxConcurrent": 2, "failureThreshold": 3, "cooldownMs": 600000 } }
-```
-
-## 配置
-
-设置保存在 `$DSH_HOME/teleagent-plugin.json`（默认 `~/.dsh/teleagent-plugin.json`）：
-
-```jsonc
-{
-  "enabledModelIds": ["chat-pro", "chat-flash"]   // 空数组 = 全部启用
-}
-```
-
-## 测试
+## 诊断与测试
 
 ```bash
-npm test              # 49 个单元测试（含签名算法确定性/敏感性）
-node test-routes.mjs  # 12 项 HTTP 路由测试
-node test-e2e.mjs     # 11 项端到端（真实调用上游，消耗少量额度）
+node lib/doctor.js          # 环境/登录态/签名/模型目录自检（--json 可机器读）
+npm test                    # 233 个单元测试（不启动真内核）
+npm run verify              # 单测 + CLI + 状态路由 + shim 形态 + 路由 + 卡片渲染（6 套件）
 ```
 
-单元测试覆盖：模型清单、状态文档、签名算法（确定性、body/nonce/ts/path 敏感性）、
-凭据诊断、设置持久化、生命周期。
-
-## 诊断
-
-```bash
-node lib/doctor.js          # 人类可读
-node lib/doctor.js --json   # 机器可读
-```
-
-检查项：应用安装、数据目录、登录态、钥匙串、设备标识、**签名自检**、模型目录、工具调用。
-
-其中「签名自检」会真实发一个 `max_tokens: 1` 的请求验证整条链路——
-如果 TeleAgent 升级导致签名算法变更，会明确报出来，而不是让用户面对一堆 401。
-
-## 变更记录
-
-逐版变更见 [CHANGELOG.md](CHANGELOG.md)。版本为 `0.x`：尚未稳定，依赖逆向出来的私有协议。
+`npm test` 覆盖：模型清单、签名算法、生命周期、凭据/账号/积分、内核传输（事件过滤、
+工具挂起、会话恢复、孤儿内核清理、思维链）、图片附件与请求预算。
 
 ## 已知限制
 
-- **图片输入：仅部分模型支持**（v0.5.1 实测，已接入）。
-  `chat-pro` / `chat-flash` 可用 OpenAI 风格
-  `{type:'image_url', image_url:{url:'data:image/png;base64,…'}}` 内容块识图；
-  `chat-lite` 会返回与图片无关的内容（胡编，不算支持），
-  `chat-nano`/`chat-flagship` 明确拒绝。客户端目录里的 `Input.Image:false` 声明与实测不符，以实测为准。
-- **没有签到/积分体系**：客户端 4MB 明文 JS 与 kernel 二进制里均无相关代码，
-  模型目录只有 `creditMultiplier`（倍率），没有余额接口。
-- **签名算法依赖逆向**：TeleAgent 若变更协议，需更新 `lib/upstream.js`（doctor 会先发现）。
-- `chat-flash` 等模型会把思考过程直接写进正文（`reasoning: 0`），是模型行为，不是插件问题。
+- **仅 macOS**：TeleAgent 桌面端只提供 macOS 版
+- **图片输入**：只有 `chat-pro` / `chat-flash` 支持；`chat-lite` 会胡编，`chat-nano` / `chat-flagship` 明确拒绝
+- **依赖逆向**：上游协议/内核升级可能需要适配（`node lib/doctor.js` 会先暴露签名问题）
+- **模型行为**：部分模型会把过程叙述直接写进正文（不是插件的渲染问题）
+- **与官方客户端可识别**：system 提示词、工具集合、TLS 指纹、请求节奏都与官方客户端不同，
+  本插件不伪装官方客户端（见下节）
 
-## 与官方客户端的可识别差异（重要）
+## 与官方客户端的可识别差异
 
-本插件**不伪装成官方客户端**，因此请求在某些维度上与官方客户端可区分。
-这不是缺陷，是一个明确的取舍：
+本插件**不伪装成官方客户端**，请求在若干维度上与官方客户端可区分，这是明确的取舍：
 
-| 维度 | 官方客户端 | 本插件 | 说明 |
-|---|---|---|---|
-| `messages[0]` | 固定 5045 字符人格串（`You are 星辰超级智能体…`） | DSH 自己的 system 提示词，或无 | **明文 body，最容易被匹配** |
-| `X-Session-Id` / `X-Message-Id` / `X-Teleai-Root-Session-Id` | 每次都有 | 已补齐（本地生成，协议正确） | 已对齐 |
-| TLS 指纹 | Electron/Chromium | Node undici | 网关层可见 |
-| 请求节奏 | 人工交互 | 可能突发/并发 | 建议配合熔断 |
+| 维度 | 官方客户端 | 本插件 |
+|---|---|---|
+| `messages[0]` | 固定人格串 | DSH 自己的 system 提示词 |
+| 工具集合 | 客户端内置工具 | DSH 的 MCP 工具（`dsh_*`） |
+| TLS 指纹 | Electron/Chromium | Node undici（shim 与内核之间为回环） |
+| 请求节奏 | 人工交互 | 可能突发/并发，已加并发与熔断限制 |
 
-**为什么不注入官方人格串**：
-
-1. 会污染行为——模型会自称「星辰超级智能体」并弱化 DSH 的指令；
-2. 属于伪造客户端身份，在账号申诉时反而说不清；
-3. 封禁是**账号级**的（换新 token 依然被拒），补人格串并不能解除既有标记。
-
-如果你需要最大化兼容性，可以自行在 `lib/upstream.js` 的 `chat()` / `chatStream()`
-里把人格串前置为第一条 system —— 但请清楚代价。
+不建议伪造官方人格或客户端身份：既会污染模型行为，也无助于账号申诉。
 
 ## 账号异常与清除登录态
 
-卡片会区分两种情况：
-
-| 情况 | 卡片显示 | 可做的操作 |
-|---|---|---|
-| 本机没有登录态 | `未登录` + 原因 | **去登录** |
-| 有凭据但失效 / 账号被封 | `账号异常` + 原因 | **去登录** 或 **清除登录态** |
-
-「清除登录态」分两步：第一次点击进入确认态，第二次才执行。
-
-**只会删除 `<scope>/app-auth/token.json`**，保留 `skills/`、`USER.md`、日志等全部个人数据。
-执行前会先退出 TeleAgent 桌面端（否则它会把凭据重写回来）。
-对应接口：`POST /plugins/dsh-connect-teleagent/logout`（仅 loopback）。
-
-这样被封的账号可以摘掉，换号登录后新凭据自动生效。
-
-## 换账号
-
-1. 在 TeleAgent 桌面端点卡片→「去登录」，或在应用内直接退出后重新登录；
-2. 插件按 `token.json` 的 mtime+size 计算**凭据指纹**，指纹一变就重建客户端，
-   并清除上一个账号的错误状态（例如封禁提示）——**不需要重启 DSH**；
-3. 多个账号目录并存时，优先读 `current-owner.json`，否则选 `token.json` 最新的那个；
-4. 用 `node lib/doctor.js` 确认新账号的登录态与签名自检。
-
-## 与 dsh-connect-workbuddy 的差异
-
-WorkBuddy 有官方开放的插件 OAuth 端点（`/v2/plugin/auth/*`），可以纯浏览器完成登录。
-TeleAgent 没有这类端点，登录仍通过唤起桌面端完成（`lib/lifecycle.js`），
-但**模型调用**已和 WorkBuddy 一样是直连上游的纯 OpenAI 客户端。
+卡片会区分「未登录」与「账号异常（凭据失效/被封）」，提供「去登录」与「清除登录态」。
+清除只删 `<scope>/app-auth/token.json`，保留 `skills/`、`USER.md`、日志等个人数据；
+执行前会先退出 TeleAgent 桌面端，避免凭据被重写。对应接口：
+`POST /plugins/dsh-connect-teleagent/logout`（仅 loopback）。
 
 ## 免责声明
 
-本项目是对本机已安装客户端行为的**互操作研究**，用于把已有账号接到自己的工具链里；
+本项目是对本机已安装客户端行为的**互操作研究**，用于把已有账号接入自己的工具链。
 请遵守 TeleAgent / DeepSeek Harness 的使用条款与当地法律，风险自负。
 仓库不包含任何真实账号凭据、cookie 或上游密钥。
+
+## License
+
+[MIT](LICENSE)
