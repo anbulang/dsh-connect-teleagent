@@ -6,6 +6,27 @@
 
 ---
 
+## 0.11.5 — 2026-11-05
+
+### 修复：跑测试/更新时会打开一次 TeleAgent 客户端
+
+**现象**：每次更新插件（或本地跑验证）都会把 TeleAgent 桌面端弹出来一次。
+
+**根因**：`npm run verify` 里的路由测试 `test-routes.mjs` 真的向
+`POST /plugins/dsh-connect-teleagent/login` 发了请求，而 login 路由的实现是
+`startLoginFlow()` → `lifecycle.launchApp()` → `open -a TeleAgent`。
+系统日志可见 `launchd ... Successfully spawned TeleAgent[...] because launch job demand`。
+
+**修法**：
+
+- login 路由支持从 `deps()` 注入 `startLoginFlow` / `runLoginFlow`（生产默认不变）
+- `test-routes.mjs` 注入 stub 并断言确实使用了 stub —— 路由依然被测到，但不会再唤起应用
+
+**验证**：修复前 `npm run verify` 后 `pgrep TeleAgent` 有进程；修复后无进程。
+`npm test` 233 全绿、`npm run verify` 6 套件全绿。
+
+---
+
 ## 0.11.4 — 2026-11-05
 
 ### 文档：README 重写 + 英文版 + 状态徽章

@@ -54,6 +54,9 @@ disposed = registerStatusRoutes({
       warning: (state.transportMode ?? 'kernel') === 'kernel' ? 'kernel 模式不支持 DSH 工具调用' : null,
     }),
     allowChatProbe: state.allowChatProbe === true,
+    // 注入登录流程：真实实现会 open -a TeleAgent，测试不能弹用户的应用
+    startLoginFlow: () => { state.loginStarts = (state.loginStarts ?? 0) + 1; return { ok: true, running: true, message: 'test stub' } },
+    runLoginFlow: async () => ({ ok: true, test: true }),
     listAccounts: () => state.accounts,
     accountPoints: async (scopes) => scopes.map((scope) => ({ ok: true, scope, balance: 100 })),
     appRunning: state.appRunning === true,
@@ -125,6 +128,7 @@ ok('非法输入过滤', JSON.stringify(readStore(home).enabledModelIds) === '["
 const s6 = await fetch(base + '/plugins/dsh-connect-teleagent/login', { method: 'POST' })
 const j6 = await s6.json()
 ok('login 路由可达', s6.status === 200 && j6.ok === true, JSON.stringify(j6).slice(0, 90))
+ok('login 使用注入流程（不会真的唤起 TeleAgent）', state.loginStarts === 1, 'starts=' + state.loginStarts)
 
 const s7 = await fetch(base + '/plugins/dsh-connect-teleagent/login')
 ok('login 拒绝 GET', s7.status === 405, 'status=' + s7.status)
