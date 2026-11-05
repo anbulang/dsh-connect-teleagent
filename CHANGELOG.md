@@ -6,6 +6,25 @@
 
 ---
 
+## 0.11.4 — 2026-11-05
+
+### 文档：README 重写 + 英文版 + 状态徽章
+
+- 修正过时描述：v0.9 起默认走 **kernel**（驱动 TeleAgent 自己的 Go 内核），不再写“直连上游、不经过 agent 运行时”
+- 安装方式重排：DSH 插件索引（推荐）/ 包管理器 / Release 离线包
+- 能力矩阵与配置说明更新：工具桥（MCP）、图片输入、`denyBuiltinTools`、积分、防护、诊断/测试数量
+- 顶部增加 shields.io 徽章（Release / Version / License / Platform / DSH / Index / Tests / Stars）
+- 新增 [README_EN.md](README_EN.md)，与中文版互相链接；默认仍为中文
+- `package.json` 的 `files` 带上 `README_EN.md`
+
+### 修复：状态卡片里的过时警告
+
+v0.10 起 kernel 已通过 MCP 桥支持 DSH 工具，但状态接口仍在提示
+“kernel 模式不支持 DSH 工具调用，需要改用 direct”。现改为：仅当**工具桥确实未就绪**
+（`toolBridge === null` 且未显式关闭）时才提示。
+
+---
+
 ## 0.11.3 — 2026-11-05
 
 ### 修复：带图请求报 `Image request width must be a positive integer.`
