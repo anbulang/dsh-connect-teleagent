@@ -702,6 +702,107 @@ test('consumeEvents: part 先于 message.updated 到达时暂存、角色判明�
   }
 })
 
+test('consumeEvents: message.part.delta 逐段下发，最终全文不重复', async () => {
+  const frames = [
+    { type: 'message.updated', properties: { info: { id: 'm1', role: 'assistant', sessionID: 'sess-1' } } },
+    { type: 'message.part.updated', properties: { part: { id: 't1', sessionID: 'sess-1', messageID: 'm1', type: 'text', text: '你' } } },
+    { type: 'message.part.delta', properties: { sessionID: 'sess-1', messageID: 'm1', partID: 't1', field: 'text', delta: '好' } },
+    { type: 'message.part.delta', properties: { sessionID: 'sess-1', messageID: 'm1', partID: 't1', field: 'text', delta: '！' } },
+    // 回合结束才来的累积全文：不能把前面三段再发一遍
+    { type: 'message.part.updated', properties: { part: { id: 't1', sessionID: 'sess-1', messageID: 'm1', type: 'text', text: '你好！' } } },
+    { type: 'session.status', properties: { sessionID: 'sess-1', status: { type: 'idle' } } },
+  ]
+  const restore = installFakeFetch(frames)
+  try {
+    const kernel = { base: 'http://127.0.0.1:1', authHeaders: () => ({}), request: async () => ({ status: 200, json: {}, text: '' }) }
+    const { consumeEvents } = await import('../lib/kernel.js')
+    const deltas = []
+    const result = await consumeEvents({ kernel, sessionID: 'sess-1', onDelta: (d) => deltas.push(d) })
+    assert.deepEqual(deltas, ['你', '好', '！'])
+    assert.equal(result.text, '你好！')
+  } finally {
+    restore()
+  }
+})
+
+test('consumeEvents: message.part.delta 的思维链增量也实时下发', async () => {
+  const frames = [
+    { type: 'message.updated', properties: { info: { id: 'm1', role: 'assistant', sessionID: 'sess-1' } } },
+    { type: 'message.part.updated', properties: { part: { id: 'r1', sessionID: 'sess-1', messageID: 'm1', type: 'reasoning', text: '先想' } } },
+    { type: 'message.part.delta', properties: { sessionID: 'sess-1', messageID: 'm1', partID: 'r1', field: 'reasoning', delta: '一下' } },
+    { type: 'message.part.updated', properties: { part: { id: 'r1', sessionID: 'sess-1', messageID: 'm1', type: 'reasoning', text: '先想一下' } } },
+    { type: 'message.part.updated', properties: { part: { id: 't1', sessionID: 'sess-1', messageID: 'm1', type: 'text', text: '答案' } } },
+    { type: 'session.status', properties: { sessionID: 'sess-1', status: { type: 'idle' } } },
+  ]
+  const restore = installFakeFetch(frames)
+  try {
+    const kernel = { base: 'http://127.0.0.1:1', authHeaders: () => ({}), request: async () => ({ status: 200, json: {}, text: '' }) }
+    const { consumeEvents } = await import('../lib/kernel.js')
+    const reasoningDeltas = []
+    const textDeltas = []
+    const result = await consumeEvents({
+      kernel,
+      sessionID: 'sess-1',
+      onDelta: (d) => textDeltas.push(d),
+      onReasoningDelta: (d) => reasoningDeltas.push(d),
+    })
+    assert.deepEqual(reasoningDeltas, ['先想', '一下'])
+    assert.deepEqual(textDeltas, ['答案'])
+    assert.equal(result.reasoning, '先想一下')
+    assert.equal(result.text, '答案')
+  } finally {
+    restore()
+  }
+})
+
+test('consumeEvents: step-start 提前判明助手角色，首个增量不再压到回合结束', async () => {
+  const frames = [
+    // 注意：message.updated 直到最后才到；没有 step-start 的话首个 text 会被暂存
+    { type: 'message.part.updated', properties: { part: { id: 's1', sessionID: 'sess-1', messageID: 'm1', type: 'step-start' } } },
+    { type: 'message.part.updated', properties: { part: { id: 't1', sessionID: 'sess-1', messageID: 'm1', type: 'text', text: '你' } } },
+    { type: 'message.part.delta', properties: { sessionID: 'sess-1', messageID: 'm1', partID: 't1', field: 'text', delta: '好' } },
+    { type: 'message.part.updated', properties: { part: { id: 't1', sessionID: 'sess-1', messageID: 'm1', type: 'text', text: '你好' } } },
+    { type: 'message.updated', properties: { info: { id: 'm1', role: 'assistant', sessionID: 'sess-1' } } },
+    { type: 'session.status', properties: { sessionID: 'sess-1', status: { type: 'idle' } } },
+  ]
+  const restore = installFakeFetch(frames)
+  try {
+    const kernel = { base: 'http://127.0.0.1:1', authHeaders: () => ({}), request: async () => ({ status: 200, json: {}, text: '' }) }
+    const { consumeEvents } = await import('../lib/kernel.js')
+    const deltas = []
+    const result = await consumeEvents({ kernel, sessionID: 'sess-1', onDelta: (d) => deltas.push(d) })
+    assert.deepEqual(deltas, ['你', '好'], '首个增量应在 step-start 后就下发')
+    assert.equal(result.text, '你好')
+  } finally {
+    restore()
+  }
+})
+
+test('consumeEvents: 增量早于 message.updated 时先放行暂存正文，前缀不丢', async () => {
+  const frames = [
+    // 角色事件最后才到；首个 text 先被暂存，紧接着就有增量。
+    // 增量本身说明这条消息正在生成，必须先按助手放行暂存 part，
+    // 否则客户端收到的流会缺掉最前面的"你"。
+    { type: 'message.part.updated', properties: { part: { id: 't1', sessionID: 'sess-1', messageID: 'm1', type: 'text', text: '你' } } },
+    { type: 'message.part.delta', properties: { sessionID: 'sess-1', messageID: 'm1', partID: 't1', field: 'text', delta: '好' } },
+    { type: 'message.part.delta', properties: { sessionID: 'sess-1', messageID: 'm1', partID: 't1', field: 'text', delta: '！' } },
+    { type: 'message.part.updated', properties: { part: { id: 't1', sessionID: 'sess-1', messageID: 'm1', type: 'text', text: '你好！' } } },
+    { type: 'message.updated', properties: { info: { id: 'm1', role: 'assistant', sessionID: 'sess-1' } } },
+    { type: 'session.status', properties: { sessionID: 'sess-1', status: { type: 'idle' } } },
+  ]
+  const restore = installFakeFetch(frames)
+  try {
+    const kernel = { base: 'http://127.0.0.1:1', authHeaders: () => ({}), request: async () => ({ status: 200, json: {}, text: '' }) }
+    const { consumeEvents } = await import('../lib/kernel.js')
+    const deltas = []
+    const result = await consumeEvents({ kernel, sessionID: 'sess-1', onDelta: (d) => deltas.push(d) })
+    assert.deepEqual(deltas, ['你', '好', '！'], '暂存的"你"必须先于增量下发')
+    assert.equal(result.text, '你好！')
+  } finally {
+    restore()
+  }
+})
+
 // ---------------------------------------------------------------- 孤儿内核清理（生命周期）
 
 test('reapStaleKernels: 只清理 ppid=1 的自家内核，并清掉 pidfile', async () => {
