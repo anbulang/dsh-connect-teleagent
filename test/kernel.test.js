@@ -611,6 +611,26 @@ test('bridge: cancelSuspended 会带着错误放行（避免内核永远卡住�
   }
 })
 
+test('bridge: cancelSuspended 不会关闭 MCP 服务（内核重启后仍能重新挂载）', async () => {
+  const bridge = await createMcpBridge()
+  try {
+    const post = (body) => fetch(bridge.url, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+    }).then((r) => r.json())
+    const init = () => post({
+      jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05' },
+    })
+
+    assert.ok((await init()).result, '初始 initialize 应该成功')
+    bridge.cancelSuspended('kernel restart')
+    // 回归：restartKernel 曾经调用 bridge.close()，把 MCP HTTP server 关掉，
+    // 新内核再 POST /mcp 时连接被拒，模型永远看不到 dsh_* 工具。
+    assert.ok((await init()).result, 'cancelSuspended 之后 MCP server 应仍然监听')
+  } finally {
+    await bridge.close()
+  }
+})
+
 test('consumeEvents: 多条消息时取最后一条的文本（续跑的关键）', async () => {
   const frames = [
     { type: 'message.updated', properties: { info: { id: 'm1', role: 'assistant', sessionID: 'sess-1' } } },
