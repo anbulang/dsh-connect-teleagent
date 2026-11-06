@@ -48,7 +48,11 @@ test('sealAuthState: 产出 v1 信封，字段齐全且可带 key 解回', async
 
 test('resolveKernelBinary: 指向 desktop 的 super-agent-code', () => {
   const bin = resolveKernelBinary('/Users/x')
-  assert.match(bin, /runtimes\/super-agent-code\/bin\/TeleAgent$/)
+  // Windows 版内核是 TeleAgent.exe，macOS 版没有扩展名
+  const expected = process.platform === 'win32'
+    ? /runtimes[\\/]super-agent-code[\\/]bin[\\/]TeleAgent\.exe$/
+    : /runtimes\/super-agent-code\/bin\/TeleAgent$/
+  assert.match(bin, expected)
 })
 
 test('contentToText: 兼容 string 与数组内容', () => {
