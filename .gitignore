@@ -17,3 +17,6 @@ docs/capsule-preview.html
 
 # 发布产物
 *.tgz
+
+# 从默认工作区迁移的文件与会话归档（不上传代码库）
+migrated-from-default-workspace/

@@ -158,6 +158,16 @@ DSH (pi-ai) ──OpenAI──► loopback shim (127.0.0.1:随机端口)
 | 幂等 | 上游 `claimed_today` + 本地 `lastClaimDate` 双重判断 |
 | 失败影响 | 仅卡片提示，不影响模型可用 |
 
+## 费用与积分（重要）
+
+- 上游按 **tokens × 模型积分倍率** 计费：输入 tokens（**含工具 schema 与完整历史上下文**）+ 输出 tokens
+- DSH 长会话 + 大量插件工具时，单步输入可达 **10 万–36 万 tokens**（实测 11-05/11-06 两天约 10.09M 输入 tokens）
+- 每个工具调用还会触发内核的 `security/instruction/review` 审核请求（内核行为，每输入/输出各一次）
+- 省钱建议：
+  - 长任务用 `chat-flash`（x0.2）或 `chat-pro`（x0.6），`chat-flagship`（x1.0）留给短问答
+  - 勤开新会话、及时压缩上下文；在 DSH 里禁用不用的插件以减少 `tools` 数量
+  - 每天记得领 100 积分（卡片可查余额；额度不足时上游返回 402/5005，插件会直接报 `insufficient quota` 而不是反复重试）
+
 ## 防护
 
 | 机制 | 默认 | 说明 |

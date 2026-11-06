@@ -10,7 +10,7 @@ import assert from 'node:assert/strict'
 import {
   buildPermission, KERNEL_TOOLS, sealAuthState, resolveKernelBinary,
   SessionStore, conversationKey, planTurn, contentToText, usageOf,
-  createKernelTransport, kernelErrorResult, materializeImages,
+  createKernelTransport, kernelErrorResult, materializeImages, normalizeUpstreamFailure,
 } from '../lib/kernel.js'
 
 // ---------------------------------------------------------------- 纯函数
@@ -142,6 +142,40 @@ test('kernelErrorResult: 上游错误码透出，状态码保留', () => {
   assert.equal(r.status, 401)
   assert.equal(r.json.error.code, 40109)
   assert.match(r.json.error.message, /banned/)
+})
+
+test('normalizeUpstreamFailure: 402/5005 用户额度不足 → insufficient quota', () => {
+  const payload = {
+    name: 'APIError',
+    data: {
+      message: 'Payment Required',
+      statusCode: 402,
+      responseBody: '{"code":5005,"resultMsg":"用户额度不足","resultData":null}',
+      responseCode: 5005,
+    },
+  }
+  const f = normalizeUpstreamFailure(payload)
+  assert.equal(f.quota, true)
+  assert.equal(f.code, 5005)
+  assert.match(f.message, /insufficient quota/)
+  assert.match(f.message, /用户额度不足/)
+  assert.match(f.message, /HTTP 402\/5005/)
+})
+
+test('kernelErrorResult: 额度不足映射成 402 且文案可被 isQuotaExceededError 识别', () => {
+  const payload = {
+    name: 'APIError',
+    data: { message: 'Payment Required', statusCode: 402, responseBody: '{"code":5005,"resultMsg":"用户额度不足"}', responseCode: 5005 },
+  }
+  const r = kernelErrorResult(Object.assign(new Error('x'), { upstream: payload }), 'chat-pro')
+  assert.equal(r.json.error.code, 402)
+  assert.match(r.json.error.message, /insufficient quota/)
+})
+
+test('normalizeUpstreamFailure: 普通错误保留上游 detail', () => {
+  const f = normalizeUpstreamFailure({ data: { message: 'Bad Gateway', responseBody: '{"resultMsg":"上游泛化错误"}' } })
+  assert.equal(f.quota, false)
+  assert.match(f.message, /上游泛化错误/)
 })
 
 // ---------------------------------------------------------------- 传输映射

@@ -150,6 +150,16 @@ Environment: `TELEAGENT_KERNEL_PORT` (default 47823), `TELEAGENT_API_KEY`.
 Balance via `/meter/super-agent/user/portal/points/detail`; daily claim at most once per day
 (checked both upstream `claimed_today` and locally). Failures only affect the card.
 
+## Cost & credits (important)
+
+- The upstream bills **tokens × credit multiplier**: input tokens (**including tool schemas and full history**) + output tokens
+- With long sessions and many plugin tools, a single step can reach **100k–360k input tokens** (measured ~10.09M input tokens across two days)
+- Every tool call also triggers the kernel's `security/instruction/review` requests (kernel behavior, one for input and one for output)
+- Tips to save credits:
+  - Use `chat-flash` (x0.2) or `chat-pro` (x0.6) for long tasks; keep `chat-flagship` (x1.0) for short Q&A
+  - Start new sessions and compact context often; disable unused DSH plugins to shrink the `tools` array
+  - Claim the daily 100 credits; when the quota is exhausted the upstream returns 402/5005 and the plugin reports `insufficient quota` instead of retrying
+
 ## Guard
 
 | Mechanism | Default | Note |

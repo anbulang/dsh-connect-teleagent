@@ -1,0 +1,1 @@
+{"type":"session","version":4,"id":"session-9c943962-4307-4169-99d4-226396365274","createdAt":1793154171328,"cwd":"/Users/chaucer/Documents/deepseek-harness/default-workspace","isSeeded":false,"delegationDepth":0,"agentPreset":"standard"}
