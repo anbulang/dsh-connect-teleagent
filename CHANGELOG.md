@@ -6,6 +6,29 @@
 
 ---
 
+## 0.11.7 — 2026-11-06
+
+### 新增：工具白名单（省 token）与单步请求统计
+
+**背景**：DSH 会把所有插件的工具都塞进每次请求。实测一条请求：
+
+- 工具 **255 个**，schema JSON **874,991 B ≈ 22 万 tokens**，占整个请求体（1.29 MB）约 68%；
+- 每一步都重发；长会话单步输入 12 万–36 万 tokens，是积分消耗和变慢的最大固定成本。
+
+**修法**
+
+- 新增 `lib/tools-filter.js`：`filterTools(tools, allowlist)`（精确名 / `foo*` 通配；
+  未配置或 `[]`/`null`/`["*"]` 全发；写错无匹配时回退全发并告警）
+- `lib/kernel.js`：每轮把过滤后的工具挂给内核（`setTools`/`mount`/`waitForRegistration`
+  都用过滤后的数量）；记录 `lastRequest`（tokens 估算、工具 x/y、是否过滤）
+- 配置来源：插件 config 的 `toolsAllowlist`，或 `~/.dsh/teleagent-plugin.json` 的同名字段（热读取）
+- 设置卡片新增「上次请求 约 N tokens · 工具 x/y」；工具 > 60 时提示配置白名单
+- README 中英文新增「工具白名单」配置示例
+
+**验证**：新增 5 项 `filterTools`/`estimatePrompt` 单测；`npm test` 243 全绿。
+
+---
+
 ## 0.11.6 — 2026-11-06
 
 ### 修复：长时间无事件 → 宿主 5 分钟判 `terminated`，随后退避重试
