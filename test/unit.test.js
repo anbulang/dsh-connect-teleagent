@@ -7,6 +7,7 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import path from 'node:path'
 
 import { MODELS, VISION_MODEL_IDS, appPaths, currentScope } from '../lib/models.js'
 import { buildStatus } from '../lib/status.js'
@@ -36,8 +37,9 @@ test('MODELS: 包含预期模型 id', () => {
 // ------------------------------------------------------------ 路径
 test('appPaths: 指向 TeleAgent 默认 XDG 目录', () => {
   const p = appPaths('/home/u')
-  assert.equal(p.data, '/home/u/.local/share/TeleAgent')
-  assert.equal(p.config, '/home/u/.config/TeleAgent')
+  // 用 path.join 生成期望值：Windows 分隔符是反斜杠
+  assert.equal(p.data, path.join('/home/u', '.local', 'share', 'TeleAgent'))
+  assert.equal(p.config, path.join('/home/u', '.config', 'TeleAgent'))
 })
 
 test('currentScope: 无登录信息时抛错', () => {

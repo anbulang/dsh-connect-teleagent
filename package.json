@@ -71,6 +71,7 @@
     "verify": "npm test && node test-cli.mjs && node test-status-route.mjs && node test-shim-shape.mjs && node test-routes.mjs && node test-ui-render.mjs",
     "test:ui": "node test-ui-render.mjs",
     "preview": "node scripts/preview-card.mjs",
+    "demo:workflow": "node demo/full-workflow.mjs",
     "test:mcp": "node test-kernel-mcp.mjs"
   },
   "displayName": "TeleAgent 模型",
