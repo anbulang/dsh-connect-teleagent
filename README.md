@@ -1,11 +1,11 @@
 <p align="center">
   <a href="https://github.com/anbulang/dsh-connect-teleagent/releases/latest"><img alt="release" src="https://img.shields.io/github/v/release/anbulang/dsh-connect-teleagent?label=release&color=2ea44f"></a>
-  <a href="https://github.com/anbulang/dsh-connect-teleagent/blob/main/package.json"><img alt="version" src="https://img.shields.io/badge/version-0.11.4-blue"></a>
+  <a href="https://github.com/anbulang/dsh-connect-teleagent/blob/main/package.json"><img alt="version" src="https://img.shields.io/badge/version-0.12.0-blue"></a>
   <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-purple"></a>
   <a href="https://github.com/anbulang/dsh-connect-teleagent"><img alt="platform" src="https://img.shields.io/badge/platform-macOS-lightgrey"></a>
   <a href="https://github.com/anbulang/dsh-connect-teleagent"><img alt="dsh" src="https://img.shields.io/badge/DSH-0.2.1--rc.1%2B-orange"></a>
   <a href="https://github.com/anbulang/dsh-connect-teleagent"><img alt="index" src="https://img.shields.io/badge/index-format--1-blueviolet"></a>
-  <a href="https://github.com/anbulang/dsh-connect-teleagent"><img alt="tests" src="https://img.shields.io/badge/tests-233%20passing-brightgreen"></a>
+  <a href="https://github.com/anbulang/dsh-connect-teleagent"><img alt="tests" src="https://img.shields.io/badge/tests-262%20passing-brightgreen"></a>
   <a href="https://github.com/anbulang/dsh-connect-teleagent/stargazers"><img alt="stars" src="https://img.shields.io/github/stars/anbulang/dsh-connect-teleagent?style=social"></a>
 </p>
 
@@ -30,6 +30,7 @@
 - **工具桥（MCP）**：DSH 的工具透传给模型，调用由 DSH 执行（有卡片、有权限）
 - **图片输入**：`chat-pro` / `chat-flash` 支持，走本机持久附件服务
 - **积分**：余额展示 + 每日自动领取（幂等），设置卡片与输入框胶囊
+- **多账号**：本机账号列表 + 「添加账号」入口；登录另一个账号时**自动保留原账号登录态**，可随时切换
 - **可订阅**：自带 format-1 插件索引，DSH「发现」页一键添加
 - **防突发**：并发上限 + 认证失败熔断，避免误触上游风控
 
@@ -103,8 +104,50 @@ bash scripts/uninstall.sh    # 卸载
 
 - **模型开关**：设置卡片里取消勾选即从选择器移除，重启后保留
 - **积分**：卡片显示余额与今日领取状态；可关自动领取
-- **换账号**：TeleAgent 桌面端重新登录后，插件按 `token.json` 指纹自动重建客户端（无需重启 DSH）
+- **添加账号（多账号）**：卡片「账号 → 本机账号 → 添加账号」→ 在 TeleAgent 里退出旧账号、
+  用另一个账号登录。插件会**先备份**旧账号登录态，检测到新账号后**原样写回**，
+  两个账号都出现在列表里、随时可切换（见下节「多账号」）
+- **换账号**：在「本机账号」列表点「切换」（只改 owner 文件，桌面端需完全退出）；
+  切换后自动重建客户端，下一次请求用新账号
 - **清除登录态**：卡片两步确认，只删 `token.json`，保留技能/记忆/个人数据
+
+## 多账号
+
+TeleAgent 桌面端同一时刻只有一个「当前账号」（`current-owner.json`），但数据目录按账号隔离
+（`users/<scope>/`，任务记录 / 技能 / 记忆各一份）。本插件在桌面上加了**多账号使用**：
+
+1. **添加账号**：卡片「账号 → 本机账号 → 添加账号」，或命令行：
+
+   ```bash
+   dsh-connect-teleagent accounts --add
+   ```
+
+   流程：备份当前账号 `token.json` → 唤起 TeleAgent → 你在应用里「设置 → 账号 → 退出登录」→
+   用**另一个账号**登录 → 插件检测到新账号、把原账号凭据**原样写回** → 两个账号都能用。
+
+2. **账号列表**：显示每个账号的昵称、有效期、**各自**的积分；「切换」写入
+   `current-owner.json`（原子替换 + 备份回滚，只改 owner 指针，不动任何 token）。
+
+3. **逐账号领取**：每个账号用自己的分区 cookie 领取每日积分，互不影响。
+
+### 为什么需要「备份 → 写回」
+
+逆向桌面端主进程可以确认：应用内「退出登录」会执行 `setToken("")` → 删除当前 owner 的
+`app-auth/token.json`。所以换号登录会**顺手删掉原账号凭据**——不备份的话，插件里的多账号
+永远退化成单账号（另一个账号变成 `no_token`，切过去也用不了）。
+
+插件因此在 DSH home 下用原子写保存一份**原字节**备份（`teleagent-login-backup.json`）：
+
+- 登录新账号后，只有原账号 token 文件**不存在**时才写回；文件已存在（同一账号重新登录）则
+  **绝不覆盖**新凭据
+- 超时 / 取消 / 流程中途崩溃，都会恢复原账号登录态（DSH 启动时也会先尝试恢复上次残留的备份）
+- 全程不修改 `current-owner.json`、不生成任何新凭据
+
+### 限制
+
+- 登录窗是 TeleAgent 主进程 IPC 独占的，外部进程无法直接打开，所以「退出登录 → 登录新账号」
+  这一步需要你在应用里操作；插件负责唤起、检测、备份与写回
+- 切换账号写 owner 文件会被桌面端覆盖，因此**桌面端运行中拒绝切换**（先完全退出 TeleAgent）
 
 ## 工作原理
 
@@ -128,6 +171,8 @@ DSH (pi-ai) ──OpenAI──► loopback shim (127.0.0.1:随机端口)
 | `lib/mcp-bridge.js` | 把 DSH 工具挂进内核 MCP，工具调用仍由 DSH 执行 |
 | `lib/index.js` | 装配 pi-ai provider，注册 `teleagent` 路由 |
 | `lib/upstream.js` | `direct` 回退模式的签名实现（见 [docs/DESIGN.md](docs/DESIGN.md)） |
+| `lib/accounts.js` | 本机账号枚举 / 逐账号积分 / 切换 / 删除 |
+| `lib/add-account.js` | 多账号登录入口：备份 token → 等换号登录 → 写回原账号凭据 |
 
 内核独立运行在 `~/.dsh-teleagent-kernel/`，不碰桌面端数据目录。
 
@@ -171,8 +216,10 @@ DSH (pi-ai) ──OpenAI──► loopback shim (127.0.0.1:随机端口)
 ### 省 token：工具白名单
 
 DSH 会把**所有插件**的工具都塞进每次请求（实测 255 个，schema 约 875 KB ≈ 22 万 tokens），
-而且每一步都会重发。可在 `~/.dsh/teleagent-plugin.json` 里配置 `toolsAllowlist`，
-只把需要的工具挂给内核（支持 `foo*` 通配）：
+而且每一步都会重发。
+
+**设置 → 插件 → TeleAgent → 模型** 里的「工具白名单」编辑框可以直接改（每行一个，
+支持 `foo*` 通配，保存后下一轮生效）；也可以写成配置文件 `~/.dsh/teleagent-plugin.json`：
 
 ```jsonc
 {
@@ -200,12 +247,13 @@ DSH 会把**所有插件**的工具都塞进每次请求（实测 255 个，sche
 
 ```bash
 node lib/doctor.js          # 环境/登录态/签名/模型目录自检（--json 可机器读）
-npm test                    # 233 个单元测试（不启动真内核）
+npm test                    # 262 个单元测试（不启动真内核）
 npm run verify              # 单测 + CLI + 状态路由 + shim 形态 + 路由 + 卡片渲染（6 套件）
 ```
 
-`npm test` 覆盖：模型清单、签名算法、生命周期、凭据/账号/积分、内核传输（事件过滤、
-工具挂起、会话恢复、孤儿内核清理、思维链）、图片附件与请求预算。
+`npm test` 覆盖：模型清单、签名算法、生命周期、凭据/账号/积分、多账号登录（备份/写回/
+超时取消/崩溃恢复）、内核传输（事件过滤、工具挂起、会话恢复、孤儿内核清理、思维链）、
+图片附件与请求预算。
 
 ## 已知限制
 

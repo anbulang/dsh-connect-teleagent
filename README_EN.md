@@ -1,11 +1,11 @@
 <p align="center">
   <a href="https://github.com/anbulang/dsh-connect-teleagent/releases/latest"><img alt="release" src="https://img.shields.io/github/v/release/anbulang/dsh-connect-teleagent?label=release&color=2ea44f"></a>
-  <a href="https://github.com/anbulang/dsh-connect-teleagent/blob/main/package.json"><img alt="version" src="https://img.shields.io/badge/version-0.11.4-blue"></a>
+  <a href="https://github.com/anbulang/dsh-connect-teleagent/blob/main/package.json"><img alt="version" src="https://img.shields.io/badge/version-0.12.0-blue"></a>
   <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-purple"></a>
   <a href="https://github.com/anbulang/dsh-connect-teleagent"><img alt="platform" src="https://img.shields.io/badge/platform-macOS-lightgrey"></a>
   <a href="https://github.com/anbulang/dsh-connect-teleagent"><img alt="dsh" src="https://img.shields.io/badge/DSH-0.2.1--rc.1%2B-orange"></a>
   <a href="https://github.com/anbulang/dsh-connect-teleagent"><img alt="index" src="https://img.shields.io/badge/index-format--1-blueviolet"></a>
-  <a href="https://github.com/anbulang/dsh-connect-teleagent"><img alt="tests" src="https://img.shields.io/badge/tests-233%20passing-brightgreen"></a>
+  <a href="https://github.com/anbulang/dsh-connect-teleagent"><img alt="tests" src="https://img.shields.io/badge/tests-262%20passing-brightgreen"></a>
   <a href="https://github.com/anbulang/dsh-connect-teleagent/stargazers"><img alt="stars" src="https://img.shields.io/github/stars/anbulang/dsh-connect-teleagent?style=social"></a>
 </p>
 
@@ -32,6 +32,8 @@ history, tool calls and streaming stay under DSH's control.
 - **Tool bridge (MCP)** — DSH tools are exposed to the model; tool calls still execute in DSH (cards + permissions)
 - **Image input** — `chat-pro` / `chat-flash` via the host's durable attachment service
 - **Credits** — balance display and idempotent daily claim, in the settings card and composer capsule
+- **Multi-account** — local account list plus an *Add account* entry; logging in another account
+  **keeps the previous account's login state**, so you can switch at any time
 - **Subscribable** — ships a format-1 plugin index; install from DSH's *Discover* tab
 - **Burst protection** — concurrency cap and auth-failure circuit breaker
 
@@ -99,9 +101,59 @@ contains the real value**; configure it locally in one of two ways:
 
 - **Model toggles** in the settings card; persisted across restarts
 - **Credits**: balance + daily claim (idempotent); auto-claim can be disabled
-- **Switch account**: after re-login in TeleAgent, the plugin rebuilds its client via the
-  credential fingerprint — no DSH restart needed
+- **Add account (multi-account)**: settings card → *Account* → *Local accounts* → *Add account*,
+  or `dsh-connect-teleagent accounts --add`. The plugin backs up the current login state,
+  then you sign out in TeleAgent and sign in with another account; the previous credential is
+  written back verbatim, and both accounts stay usable (see *Multi-account* below)
+- **Switch account**: pick an account in the local list; it rewrites the owner pointer
+  (TeleAgent must be fully quit) and rebuilds the client so the next request uses it
 - **Clear login state**: two-step confirmation; deletes only `token.json`
+
+## Multi-account
+
+The TeleAgent desktop app keeps a single *current owner* (`current-owner.json`), but its data
+directory is isolated per account (`users/<scope>/` — tasks, skills and memory each get a copy).
+This plugin adds multi-account usage on top of it:
+
+1. **Add account** — settings card → *Account* → *Local accounts* → *Add account*, or:
+
+   ```bash
+   dsh-connect-teleagent accounts --add
+   ```
+
+   Flow: back up the current `token.json` → launch TeleAgent → you sign out in the app
+   (*Settings → Account → Sign out*) → sign in with **another** account → the plugin detects the
+   new account and writes the previous credential back verbatim → both accounts are usable.
+
+2. **Account list** — shows each account's name, expiry and **its own** credit balance.
+   *Switch* rewrites `current-owner.json` (atomic replace + backup rollback); it only moves the
+   owner pointer and never touches any token.
+
+3. **Per-account claims** — each account claims its daily credits with its own partition cookies.
+
+### Why backup + write back is required
+
+Reverse engineering the desktop main process shows that in-app sign-out executes
+`setToken("")` → deletes the current owner's `app-auth/token.json`. So signing in with another
+account **also deletes the previous account's credential** — without a backup, multi-account in
+this plugin would degrade to single-account (the other account shows `no_token` and cannot be used).
+
+The plugin therefore stores a byte-for-byte backup atomically under the DSH home
+(`teleagent-login-backup.json`):
+
+- After the new account signs in, the previous `token.json` is written back **only if it is
+  missing**; if it exists (same account re-login), the fresh credential is never overwritten
+- Timeout, cancel, or a crash mid-flow all restore the previous login state (DSH also restores any
+  leftover backup at startup)
+- `current-owner.json` is never modified and no new credential is ever generated
+
+### Limitations
+
+- The login window is owned by the TeleAgent main process (`login:open` IPC) and cannot be opened
+  from outside, so the sign-out → sign-in step is manual; the plugin handles launching, detection,
+  backup and write-back
+- Switching writes the owner file, which the desktop app overwrites while running — so switching is
+  refused while TeleAgent is running (quit it first)
 
 ## How it works
 
@@ -126,6 +178,8 @@ DSH (pi-ai) ──OpenAI──► loopback shim (127.0.0.1:random port)
 | `lib/mcp-bridge.js` | Mount DSH tools into the kernel's MCP; execution stays in DSH |
 | `lib/index.js` | Assemble the pi-ai provider and register the `teleagent` route |
 | `lib/upstream.js` | `direct` fallback signing (see [docs/DESIGN.md](docs/DESIGN.md)) |
+| `lib/accounts.js` | Local account listing / per-account credits / switch / delete |
+| `lib/add-account.js` | Multi-account login: back up token → wait for sign-in → write back |
 
 ## Configuration
 
@@ -163,8 +217,10 @@ Balance via `/meter/super-agent/user/portal/points/detail`; daily claim at most 
 ### Saving tokens: tool allowlist
 
 DSH puts **every plugin's tools** into each request (measured: 255 tools, ~875 KB schema
-≈ 220k tokens), re-sent on every step. Configure `toolsAllowlist` in
-`~/.dsh/teleagent-plugin.json` to expose only the tools the kernel needs (`foo*` wildcards supported):
+≈ 220k tokens), re-sent on every step.
+
+Edit it in **Settings → Plugins → TeleAgent → Models → Tool allowlist** (one per line,
+`foo*` wildcards supported; applies on the next request), or in `~/.dsh/teleagent-plugin.json`:
 
 ```jsonc
 {
@@ -192,7 +248,7 @@ DSH puts **every plugin's tools** into each request (measured: 255 tools, ~875 K
 
 ```bash
 node lib/doctor.js          # environment / login / signature / model catalog checks
-npm test                    # 233 unit tests (no real kernel)
+npm test                    # 262 unit tests (no real kernel)
 npm run verify              # unit + CLI + status routes + shim shape + routes + UI render
 ```
 

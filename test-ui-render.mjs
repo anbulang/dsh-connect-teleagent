@@ -88,6 +88,8 @@ function render(props) {
     onTab: () => {},
     onRefresh: () => {}, onLogin: () => {}, onClear: () => {}, onToggle: () => {},
     onClaim: () => {}, onToggleAuto: () => {}, onRefreshWelfare: () => {},
+    onAddAccount: () => {}, onCancelAddAccount: () => {},
+    addAccountRunning: false, addAccountResult: null,
     ...props,
   }
   try {
@@ -125,6 +127,87 @@ const scenarios = [
     expect: ['TeleAgent', '正常', '示例账号', '剩余 28 天', '清除登录态', '智能', 'chat-pro', '倍率 x0.6',
              '积分福利', '1234.56', '2026-10-31', '今日已领', '累计 2 天 200 积分', '自动领取', '图片',
              '福利活动', '邀请共享积分礼', '本机账号', 'acct-A', '切换', '删除'],
+  },
+  {
+    // 多账号登录入口：新宿主声明 addAccount 能力后，卡片必须给出入口
+    name: '多账号登录入口',
+    props: {
+      status: {
+        auth: { signedIn: true, accountName: '示例账号', expiresAt: Date.now() + 86400000, daysLeft: 28 },
+        upstream: { ready: true },
+        account: { abnormal: false, canClear: true, scopes: 1, canAddAccount: true },
+        guard: { open: false, consecutiveFailures: 0, failureThreshold: 3 },
+        provider: { disabled: false },
+        capabilities: { deleteAccount: true, addAccount: true },
+        models: baseModels,
+      },
+    },
+    expect: ['添加账号', '登录另一个 TeleAgent 账号', 'acct-A'],
+  },
+  {
+    // 等待登录态：按钮变「取消」，并给出换号操作步骤
+    name: '添加账号等待中',
+    props: {
+      addAccountRunning: true,
+      status: {
+        auth: { signedIn: true, accountName: '示例账号' },
+        upstream: { ready: true },
+        account: { abnormal: false, canClear: true, scopes: 1, canAddAccount: true },
+        guard: { open: false, consecutiveFailures: 0, failureThreshold: 3 },
+        capabilities: { deleteAccount: true, addAccount: true },
+        models: baseModels,
+      },
+    },
+    expect: ['添加账号（等待登录）', '取消', '等待登录中', '退出登录'],
+  },
+  {
+    name: '添加账号成功',
+    props: {
+      addAccountResult: { ok: true, code: 'added', message: '已添加账号「acct-B」；原账号「acct-A」的登录态已保留' },
+      status: {
+        auth: { signedIn: true, accountName: '示例账号' },
+        upstream: { ready: true },
+        account: { abnormal: false, canClear: true, scopes: 1, canAddAccount: true },
+        guard: { open: false, consecutiveFailures: 0, failureThreshold: 3 },
+        capabilities: { deleteAccount: true, addAccount: true },
+        models: baseModels,
+      },
+    },
+    expect: ['已添加账号「acct-B」', '登录态已保留'],
+  },
+  {
+    name: '添加账号超时',
+    props: {
+      addAccountResult: {
+        ok: false, code: 'timeout', timedOut: true,
+        reason: '等待超时（5 分钟内未检测到新账号登录）',
+        hint: '在 TeleAgent 里「设置 → 账号 → 退出登录」后，用另一个账号完成登录',
+      },
+      status: {
+        auth: { signedIn: true, accountName: '示例账号' },
+        upstream: { ready: true },
+        account: { abnormal: false, canClear: true, scopes: 1, canAddAccount: true },
+        guard: { open: false, consecutiveFailures: 0, failureThreshold: 3 },
+        capabilities: { deleteAccount: true, addAccount: true },
+        models: baseModels,
+      },
+    },
+    expect: ['等待超时', '退出登录'],
+  },
+  {
+    // 宿主还是旧版本：按钮要保留但禁用，并说明"重启 DSH 后可用"
+    name: '旧宿主无添加账号能力',
+    props: {
+      status: {
+        auth: { signedIn: true, accountName: '示例账号' },
+        upstream: { ready: true },
+        account: { abnormal: false, canClear: true, scopes: 1 },
+        guard: { open: false, consecutiveFailures: 0, failureThreshold: 3 },
+        capabilities: { deleteAccount: true },
+        models: baseModels,
+      },
+    },
+    expect: ['添加账号', '当前宿主仍是旧版本'],
   },
   {
     name: '未登录',

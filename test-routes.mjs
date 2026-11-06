@@ -7,7 +7,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { registerStatusRoutes } from './lib/status.js'
-import { readStore, saveEnabledModels } from './lib/store.js'
+import { readStore, saveEnabledModels, writeStore } from './lib/store.js'
 
 const report = []
 const ok = (n, c, d='') => report.push({ n, c, d })
@@ -56,7 +56,22 @@ disposed = registerStatusRoutes({
     allowChatProbe: state.allowChatProbe === true,
     // 注入登录流程：真实实现会 open -a TeleAgent，测试不能弹用户的应用
     startLoginFlow: () => { state.loginStarts = (state.loginStarts ?? 0) + 1; return { ok: true, running: true, message: 'test stub' } },
+    toolsAllowlist: () => state.toolsAllowlist ?? null,
+    setToolsAllowlist: (value) => { state.toolsAllowlist = Array.isArray(value) ? value : null; writeStore({ toolsAllowlist: state.toolsAllowlist }, home); return true },
     runLoginFlow: async () => ({ ok: true, test: true }),
+    // 添加账号流程：同样全部 stub，不唤起真实应用
+    startAddAccountFlow: (options) => {
+      state.addStarts = (state.addStarts ?? 0) + 1
+      state.addTimeout = options?.timeoutMs ?? null
+      state.addAccount = { running: true, startedAt: Date.now(), result: null }
+      return { ok: true, running: true, message: '已唤起 TeleAgent：请在应用里「设置 → 账号 → 退出登录」，再用另一个账号登录', hint: 'test hint' }
+    },
+    runAddAccountFlow: async () => ({ ok: true, code: 'added', added: { scope: 'v1_public_C' } }),
+    cancelAddAccountFlow: () => {
+      state.addCancels = (state.addCancels ?? 0) + 1
+      return { ok: true, running: true, message: 'test cancel' }
+    },
+    getAddAccountState: () => state.addAccount ?? { running: false, startedAt: null, result: null },
     listAccounts: () => state.accounts,
     accountPoints: async (scopes) => scopes.map((scope) => ({ ok: true, scope, balance: 100 })),
     appRunning: state.appRunning === true,
@@ -95,6 +110,8 @@ ok('status 含 5 个模型', j1.models?.length === 5)
 ok('status 含传输方式', j1.transport?.mode === 'kernel', JSON.stringify(j1.transport ?? {}).slice(0, 80))
 ok('kernel 模式带能力警示', /工具调用/.test(j1.transport?.warning ?? ''), String(j1.transport?.warning ?? '').slice(0, 40))
 ok('status 含能力集', j1.capabilities?.deleteAccount === true, JSON.stringify(j1.capabilities ?? {}))
+ok('status 声明多账号登录能力', j1.capabilities?.addAccount === true, JSON.stringify(j1.capabilities ?? {}))
+ok('status 带 canAddAccount 标记', typeof j1.account?.canAddAccount === 'boolean', String(j1.account?.canAddAccount))
 ok('status 不含 token', !/eyJ[A-Za-z0-9_-]{10,}/.test(JSON.stringify(j1)))
 
 // 2. 方法限制
@@ -124,6 +141,36 @@ await fetch(base + '/plugins/dsh-connect-teleagent/models', {
 })
 ok('非法输入过滤', JSON.stringify(readStore(home).enabledModelIds) === '["chat-pro"]', JSON.stringify(readStore(home).enabledModelIds))
 
+// 6.0 工具白名单
+const t0 = await fetch(base + '/plugins/dsh-connect-teleagent/status')
+const jt0 = await t0.json()
+ok('status 含 toolsAllowlist 字段', Object.prototype.hasOwnProperty.call(jt0, 'toolsAllowlist'), JSON.stringify(jt0.toolsAllowlist))
+
+const t1 = await fetch(base + '/plugins/dsh-connect-teleagent/tools', {
+  method: 'POST', headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ toolsAllowlist: ['bash', 'read', ' web_* ', 123, ''] }),
+})
+const jt1 = await t1.json()
+ok('tools 保存成功', t1.status === 200 && jt1.ok === true, JSON.stringify(jt1))
+ok('tools 过滤非法项并落盘', JSON.stringify(readStore(home).toolsAllowlist) === '["bash","read","web_*"]', JSON.stringify(readStore(home).toolsAllowlist))
+
+const t2 = await fetch(base + '/plugins/dsh-connect-teleagent/status')
+const jt2 = await t2.json()
+ok('status 反映白名单', JSON.stringify(jt2.toolsAllowlist) === '["bash","read","web_*"]', JSON.stringify(jt2.toolsAllowlist))
+
+const t3 = await fetch(base + '/plugins/dsh-connect-teleagent/tools', {
+  method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ toolsAllowlist: null }),
+})
+const jt3 = await t3.json()
+ok('tools 可恢复全量', t3.status === 200 && jt3.toolsAllowlist === null && readStore(home).toolsAllowlist === null, JSON.stringify(jt3))
+
+const t4 = await fetch(base + '/plugins/dsh-connect-teleagent/tools', {
+  method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ toolsAllowlist: 'bash' }),
+})
+ok('tools 拒绝非数组', t4.status === 400, 'status=' + t4.status)
+const t5 = await fetch(base + '/plugins/dsh-connect-teleagent/tools')
+ok('tools 拒绝 GET', t5.status === 405, 'status=' + t5.status)
+
 // 6. 登录路由
 const s6 = await fetch(base + '/plugins/dsh-connect-teleagent/login', { method: 'POST' })
 const j6 = await s6.json()
@@ -132,6 +179,36 @@ ok('login 使用注入流程（不会真的唤起 TeleAgent）', state.loginStar
 
 const s7 = await fetch(base + '/plugins/dsh-connect-teleagent/login')
 ok('login 拒绝 GET', s7.status === 405, 'status=' + s7.status)
+
+// 6.1 多账号登录入口（添加账号）
+const add0 = await fetch(base + '/plugins/dsh-connect-teleagent/login?mode=add')
+const jadd0 = await add0.json()
+ok('add-account 进度可读', add0.status === 200 && jadd0.running === false, JSON.stringify(jadd0).slice(0, 80))
+
+const add1 = await fetch(base + '/plugins/dsh-connect-teleagent/login', {
+  method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode: 'add' }),
+})
+const jadd1 = await add1.json()
+ok('add-account 启动', add1.status === 200 && jadd1.ok === true && state.addStarts === 1, JSON.stringify(jadd1).slice(0, 90))
+ok('add-account 启动提示换号步骤', /退出登录/.test(jadd1.message ?? ''), String(jadd1.message ?? '').slice(0, 60))
+
+const add2 = await fetch(base + '/plugins/dsh-connect-teleagent/login?mode=add')
+const jadd2 = await add2.json()
+ok('add-account 进度反映 running', jadd2.running === true, JSON.stringify(jadd2).slice(0, 60))
+
+const add3 = await fetch(base + '/plugins/dsh-connect-teleagent/login', {
+  method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode: 'add', action: 'cancel' }),
+})
+const jadd3 = await add3.json()
+ok('add-account 取消', add3.status === 200 && jadd3.ok === true && state.addCancels === 1, JSON.stringify(jadd3).slice(0, 80))
+
+state.addAccount = { running: false, startedAt: Date.now(), result: null }
+const add4 = await fetch(base + '/plugins/dsh-connect-teleagent/login', {
+  method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode: 'add', wait: true }),
+})
+const jadd4 = await add4.json()
+ok('add-account wait=true 同步返回结果', add4.status === 200 && jadd4.code === 'added', JSON.stringify(jadd4).slice(0, 90))
+state.addAccount = { running: false, startedAt: null, result: null }
 // 注意：不能真调 POST /logout —— 它会退出桌面端并删除真实凭据。
 // 这里只验证路由存在且拒绝非 POST。
 // 福利接口（GET 快照 / POST 领取 / POST 开关）

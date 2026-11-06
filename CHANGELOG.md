@@ -6,6 +6,75 @@
 
 ---
 
+## 0.12.1 — 2026-11-06
+
+### 新增：设置页可配置工具白名单
+
+- 设置 → 插件 → TeleAgent → **模型** tab 新增「工具白名单」编辑框：
+  每行一个（也支持逗号分隔）、支持 `foo*` 通配；「保存」/「恢复全量」两个按钮；
+  保存后**无需重启**，下一轮请求生效（内核每轮热读取配置）
+- 新增 `POST /plugins/dsh-connect-teleagent/tools` 路由（仅 loopback）：
+  `{"toolsAllowlist": string[] | null}`，过滤非法项、上限 500 条
+- `/status` 增加 `toolsAllowlist` 字段；卡片同时显示上次请求估算 tokens 与「工具 x/y」
+- 注：本版本同时包含 0.12.0 的多账号登录入口（此前只在本地工作区，未发布）
+
+**验证**：`npm test` 262 全绿，`npm run verify` 6 套件全绿。
+
+---
+
+## 0.12.0 — 2026-11-06
+
+### 新增：多账号登录入口（给插件加「添加账号」）
+
+**问题**：v0.8.0 已经有「本机账号」列表（列表 / 各自积分 / 切换 / 删除），但只能在
+**已经存在的**账号目录之间操作。本机只要没登录过第二个账号，卡片就永远只有一行，
+也没有任何入口能再登一个——「多账号」实际退化为单账号。
+
+**为什么以前会这样（逆向结论）**
+
+TeleAgent 桌面端同一时刻只有一个 owner（`current-owner.json`），但数据目录按账号隔离
+（`users/<scope>/`）。逆向 `dist-electron/main-runtime-*.js` 可以确认：
+
+```js
+setToken(e) { this.token = e, e || this.deleteOwnerToken($y()), this.ensureState() }
+```
+
+renderer 的「退出登录」会调用 `appAuth.setToken("")`，即**删除当前 owner 的
+`app-auth/token.json`**。也就是说桌面端换号登录本身就会顺手删掉原账号凭据；
+不备份的话，插件里的第二个账号永远是 `no_token`，切过去也用不了。
+
+**实现**
+
+- 新增 `lib/add-account.js`：备份 → 唤起应用 → 轮询检测新账号 → 写回原账号凭据 → 退出应用
+  - 备份是 `token.json` 的**原字节**，原子写到 `$DSH_HOME/teleagent-login-backup.json`
+  - 写回条件严格：只有原账号 token.json **不存在**时才写；同一账号重新登录（文件已存在）
+    绝不覆盖新凭据
+  - 超时 / 取消 / 异常都会恢复；DSH 启动时（`apply()`）也会先尝试恢复上次残留的备份
+  - 全程不修改 `current-owner.json`，不生成任何新凭据
+  - 备份写不进去（磁盘/权限）时**直接中止**，不唤起应用——不能让用户退出登录后丢凭据
+  - 如果是插件拉起的应用，登录完成后退出它；本来就在运行的应用不动（与 `loginThenQuit` 一致）
+- `/plugins/dsh-connect-teleagent/login` 扩展：
+  - `POST { mode: "add" }` 启动（非阻塞）、`{ mode: "add", action: "cancel" }` 取消、
+    `{ mode: "add", wait: true }` 同步等待结果
+  - `GET /login?mode=add` 查询进度（卡片轮询；不影响原有 `GET /login` → 405 的行为）
+  - 新账号登录成功后调用 authRefresher 重建上游客户端/kernel，并让积分缓存过期
+- 设置卡片：「本机账号」新增「添加账号」入口（等待态显示「取消」+ 操作步骤；
+  成功/超时/取消都有明确提示）；宿主能力集新增 `addAccount`，`status.account` 新增
+  `canAddAccount`，旧宿主上按钮保留但禁用并提示重启
+- 切换账号后立即 `refreshUpstream()`（重建 kernel），不再需要重启 DSH 才用新账号
+- 命令行：`dsh-connect-teleagent accounts --add [--timeout=<ms>]`
+- README 中英文新增「多账号」章节（流程、备份写回规则、限制）
+
+**已知限制**：登录窗是主进程 `login:open` IPC 独占的，外部无法直接打开，
+所以「退出登录 → 用另一个账号登录」这一步仍需用户在 TeleAgent 应用内操作；
+插件负责唤起、检测、备份与写回。
+
+**验证**：新增 19 项 `test/add-account.test.js`（备份字节一致 / 写回 / 同账号不覆盖 /
+超时恢复 / 取消恢复 / 备份失败中止 / 无账号也能添加 / 崩溃残留恢复）；路由/状态路由测试新增 10 项；
+卡片渲染新增 5 个场景；`npm test` **262 全绿**，`npm run verify` 全绿。
+
+---
+
 ## 0.11.7 — 2026-11-06
 
 ### 新增：工具白名单（省 token）与单步请求统计
