@@ -97,6 +97,8 @@ ok('已注册 models 路由', models !== undefined)
 ok('已注册 login 路由', login !== undefined)
 const logout = routes.find((r) => String(r.path ?? '').endsWith('/logout'))
 ok('已注册 logout 路由', logout !== undefined)
+const toolsRoute = routes.find((r) => String(r.path ?? '').endsWith('/tools'))
+ok('已注册 tools（工具白名单）路由', toolsRoute !== undefined)
 
 // 真跑一次 HTTP 请求，断言 200 且形状正确
 if (status?.handler) {
@@ -122,6 +124,8 @@ if (status?.handler) {
       ok('status 含 guard 字段', j.guard !== undefined, JSON.stringify(j.guard).slice(0, 60))
       ok('status 含 account 字段', j.account !== undefined, JSON.stringify(j.account).slice(0, 90))
       ok('未登录时提示下一步', j.account?.abnormal !== true || typeof j.account?.nextStep === 'string')
+      ok('status 声明添加账号能力', j.capabilities?.addAccount === true, JSON.stringify(j.capabilities ?? {}))
+      ok('status 带 canAddAccount 标记', typeof j.account?.canAddAccount === 'boolean', String(j.account?.canAddAccount))
       ok('status 不含 token', !/eyJ[A-Za-z0-9_-]{10,}/.test(text))
     } catch (e) {
       ok('status 是合法 JSON', false, String(e))
@@ -130,6 +134,21 @@ if (status?.handler) {
   server.close()
 } else {
   ok('GET status 返回 200', false, '路由未注册，无法请求')
+}
+
+// 「添加账号」进度接口：GET 只读，不应启动任何流程
+if (login?.handler) {
+  const server2 = http.createServer((req, res) => {
+    req.headers.host = `127.0.0.1:${server2.address().port}`
+    Promise.resolve(login.handler(req, res)).catch((e) => { res.writeHead(500); res.end(String(e)) })
+  })
+  await new Promise((r) => server2.listen(0, '127.0.0.1', r))
+  const port2 = server2.address().port
+  const res2 = await fetch(`http://127.0.0.1:${port2}/plugins/dsh-connect-teleagent/login?mode=add`)
+  const j2 = await res2.json().catch(() => null)
+  ok('GET login?mode=add 返回进度', res2.status === 200 && j2?.running === false, `HTTP ${res2.status} ${JSON.stringify(j2 ?? {}).slice(0, 80)}`)
+  ok('未启动流程时结果为空', j2?.result === null || j2?.result === undefined, JSON.stringify(j2?.result ?? null).slice(0, 60))
+  server2.close()
 }
 
 console.log('\n状态路由反馈回路')

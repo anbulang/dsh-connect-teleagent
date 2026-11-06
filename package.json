@@ -1,7 +1,7 @@
 {
   "name": "dsh-connect-teleagent",
-  "version": "0.11.7",
-  "description": "把本机登录的 TeleAgent（天翼 AI 星辰超级智能体桌面端）模型接入 DeepSeek Harness：原生内核流量 + 真流式 + 多轮 + 图片 + 工具调用 + 思维链 + 积分。",
+  "version": "0.12.1",
+  "description": "把本机登录的 TeleAgent（天翼 AI 星辰超级智能体桌面端）模型接入 DeepSeek Harness：原生内核流量 + 真流式 + 多轮 + 图片 + 工具调用 + 思维链 + 积分 + 多账号。",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -62,7 +62,7 @@
     "dsh-connect-teleagent": "./lib/bin.js"
   },
   "scripts": {
-    "test": "node --test test/unit.test.js test/credential.test.js test/store.test.js test/lifecycle.test.js test/health.test.js test/guard.test.js test/account.test.js test/welfare.test.js test/metadata.test.js test/accounts.test.js test/kernel.test.js test/loader.test.js test/attachments.test.js test/image-budget.test.js test/shim-heartbeat.test.js test/tools-filter.test.js",
+    "test": "node --test test/unit.test.js test/credential.test.js test/store.test.js test/lifecycle.test.js test/health.test.js test/guard.test.js test/account.test.js test/welfare.test.js test/metadata.test.js test/accounts.test.js test/add-account.test.js test/kernel.test.js test/loader.test.js test/attachments.test.js test/image-budget.test.js test/shim-heartbeat.test.js test/tools-filter.test.js",
     "doctor": "node lib/doctor.js",
     "test:routes": "node test-routes.mjs",
     "test:e2e": "node test-e2e.mjs",
