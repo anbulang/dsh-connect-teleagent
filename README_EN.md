@@ -160,6 +160,26 @@ Balance via `/meter/super-agent/user/portal/points/detail`; daily claim at most 
   - Start new sessions and compact context often; disable unused DSH plugins to shrink the `tools` array
   - Claim the daily 100 credits; when the quota is exhausted the upstream returns 402/5005 and the plugin reports `insufficient quota` instead of retrying
 
+### Saving tokens: tool allowlist
+
+DSH puts **every plugin's tools** into each request (measured: 255 tools, ~875 KB schema
+≈ 220k tokens), re-sent on every step. Configure `toolsAllowlist` in
+`~/.dsh/teleagent-plugin.json` to expose only the tools the kernel needs (`foo*` wildcards supported):
+
+```jsonc
+{
+  "toolsAllowlist": [
+    "bash", "read", "write", "edit", "glob", "grep",
+    "web_*", "job_*", "task", "skill*", "ask_user_question", "todo_write",
+    "mcp__rea__*"
+  ]
+}
+```
+
+- Unset / `null` / `[]` / `["*"]` = send everything (previous behavior)
+- Exact names or suffix wildcards; if nothing matches, it falls back to all tools and logs a warning
+- The settings card shows "last request: ~N tokens · tools x/y" and hints when more than 60 tools are sent
+
 ## Guard
 
 | Mechanism | Default | Note |

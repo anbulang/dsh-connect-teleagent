@@ -168,6 +168,26 @@ DSH (pi-ai) ──OpenAI──► loopback shim (127.0.0.1:随机端口)
   - 勤开新会话、及时压缩上下文；在 DSH 里禁用不用的插件以减少 `tools` 数量
   - 每天记得领 100 积分（卡片可查余额；额度不足时上游返回 402/5005，插件会直接报 `insufficient quota` 而不是反复重试）
 
+### 省 token：工具白名单
+
+DSH 会把**所有插件**的工具都塞进每次请求（实测 255 个，schema 约 875 KB ≈ 22 万 tokens），
+而且每一步都会重发。可在 `~/.dsh/teleagent-plugin.json` 里配置 `toolsAllowlist`，
+只把需要的工具挂给内核（支持 `foo*` 通配）：
+
+```jsonc
+{
+  "toolsAllowlist": [
+    "bash", "read", "write", "edit", "glob", "grep",
+    "web_*", "job_*", "task", "skill*", "ask_user_question", "todo_write",
+    "mcp__rea__*"
+  ]
+}
+```
+
+- 不配置 / `null` / `[]` / `["*"]` = 全发（旧行为）
+- 精确名字或后缀通配；配置写错导致一个都没匹配时会**回退全发**并记日志
+- 设置卡片会显示「上次请求 约 N tokens · 工具 x/y」；工具超过 60 个时提示配置
+
 ## 防护
 
 | 机制 | 默认 | 说明 |
