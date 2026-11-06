@@ -22,11 +22,30 @@ test('buildPermission: 默认全部 deny（kernel 不替 DSH 执行工具）', (
   assert.equal(p.image_read, 'deny')
 })
 
+test('buildPermission: 覆盖 Windows 内核实际注册的全部 builtin（含 powershell）', () => {
+  // 取自 `GET /experimental/tool/ids`（TeleAgent 2.7.1 / Windows）。
+  // 少一个 powershell 就会让模型绕过 DSH，在内核里自己跑命令，DSH 这轮只能干等。
+  const builtinIds = [
+    'bash', 'codesearch', 'read', 'edit', 'apply_patch', 'glob', 'grep',
+    'online_search', 'powershell', 'webfetch', 'websearch', 'todoread', 'todowrite',
+    'write', 'question', 'image_understanding', 'ImageGen', 'ImageGenWithRef',
+    'multiedit', 'teleai_claw_scan', 'report_final_files', 'memory_get', 'memory_search',
+    'invalid', 'task', 'session_status', 'session_continue', 'skill_list', 'skill_view',
+    'skill_manage', 'skill_evolution_resolve',
+  ]
+  const p = buildPermission()
+  for (const id of builtinIds) assert.equal(p[id], 'deny', `${id} 应被拒绝`)
+  // MCP 桥过去的工具不能被误伤
+  assert.equal(p.dsh_powershell, undefined)
+  assert.equal(p.dsh_read, undefined)
+})
+
 test('buildPermission: 白名单内的才 allow', () => {
   const p = buildPermission(['bash', 'read'])
   assert.equal(p.bash, 'allow')
   assert.equal(p.read, 'allow')
   assert.equal(p.write, 'deny')
+  assert.equal(p.powershell, 'deny')
 })
 
 test('sealAuthState: 产出 v1 信封，字段齐全且可带 key 解回', async () => {
