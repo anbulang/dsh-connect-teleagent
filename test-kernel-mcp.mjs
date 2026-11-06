@@ -12,6 +12,14 @@ import { createMcpBridge, callsToOpenAiToolCalls } from './lib/mcp-bridge.js'
 
 const report = []
 const ok = (name, pass, detail = '') => report.push({ name, pass, detail })
+const waitFor = async (check, timeoutMs = 3000) => {
+  const started = Date.now()
+  while (Date.now() - started < timeoutMs) {
+    if (check()) return true
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+  return false
+}
 
 // 两个最小可用的 OpenAI 工具定义（形状取自 DSH 真实请求）
 const TOOLS = [
@@ -62,18 +70,18 @@ try {
   ok('内核内置工具被关闭', disabled.length > 0 && !disabled.some((k) => k.startsWith('dsh_')), `关闭 ${disabled.length} 个`)
   ok('内置工具里不含我们的工具', !disabled.includes('dsh_bash'))
 
-  // 模拟一次 MCP tools/call：应当被拦截、不执行，并出现在待取列表里
-  const callRes = await fetch(bridge.url, {
+  // 模拟一次 MCP tools/call：应当被拦截并**挂起**（内核在等 DSH 的真实结果）
+  const callPromise = fetch(bridge.url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
     body: JSON.stringify({
       jsonrpc: '2.0', id: 1, method: 'tools/call',
       params: { name: 'dsh_bash', arguments: { command: 'echo hi' } },
     }),
-  })
-  const callBody = await callRes.text()
-  ok('tools/call 有响应', callRes.status === 200, `HTTP ${callRes.status}`)
-  ok('tools/call 返回"已延迟"而不是执行结果', /deferred/.test(callBody), callBody.slice(0, 120))
+  }).then(async (res) => ({ status: res.status, body: await res.json() }))
+
+  const suspended = await waitFor(() => bridge.hasSuspended(), 3000)
+  ok('tools/call 被拦截并挂起', suspended === true)
 
   const calls = bridge.takeCalls()
   ok('调用被记录', calls.length === 1 && calls[0].tool === 'bash', JSON.stringify(calls))
@@ -82,6 +90,16 @@ try {
   const toolCalls = callsToOpenAiToolCalls(calls)
   ok('可翻译成 OpenAI tool_calls', toolCalls[0]?.function?.name === 'bash' && /echo hi/.test(toolCalls[0].function.arguments), JSON.stringify(toolCalls[0]).slice(0, 120))
   ok('takeCalls 后清空', bridge.takeCalls().length === 0)
+
+  // 模拟 DSH 执行完、下一轮把结果送回来：按 tool_call_id 放行
+  bridge.bindCallIds(toolCalls.map((call) => call.id))
+  const resolved = bridge.resolveSuspendedResults([
+    { tool_call_id: toolCalls[0].id, name: 'bash', content: 'hi' },
+  ])
+  ok('按 tool_call_id 逐条放行', resolved === 1, `放行 ${resolved} 个`)
+
+  const answer = await callPromise
+  ok('tools/call 放行后返回工具结果', answer.status === 200 && JSON.stringify(answer.body).includes('hi'), JSON.stringify(answer.body).slice(0, 160))
 
   // transport 也应能拿到桥（工具开关走 tools 参数传给内核）
   const transport = createKernelTransport({ kernel, bridge })

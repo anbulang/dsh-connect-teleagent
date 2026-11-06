@@ -492,9 +492,39 @@ function makeFakeBridge(calls) {
   }
 }
 
+/** 假 bridge：模拟真实的挂起流程（takeCalls 后调用仍挂着，等续跑结果放行） */
+function makeSuspendingBridge(calls) {
+  let pending = calls.slice()
+  let suspended = calls.map(() => ({}))
+  const stats = { ids: [], results: null }
+  return {
+    stats,
+    setTools: () => false,
+    mount: async () => ({ ok: true }),
+    waitForRegistration: async (_k, { expected } = {}) => ({ ok: true, tools: Array(expected).fill('dsh_x') }),
+    builtinFlags: async () => ({ bash: false }),
+    hasCalls: () => pending.length > 0,
+    takeCalls: () => { const c = pending; pending = []; return c },
+    hasSuspended: () => suspended.length > 0,
+    bindCallIds(ids) {
+      stats.ids = ids.slice()
+      suspended = ids.map((id) => ({ callId: id }))
+      return ids.length
+    },
+    resolveSuspendedResults(results) {
+      stats.results = results
+      suspended = []
+      return results.length
+    },
+    cancelSuspended: () => { suspended = []; return 1 },
+  }
+}
+
 const TOOL_FRAMES = [
   { type: 'message.updated', properties: { info: { id: 'm1', role: 'assistant', sessionID: 'sess-1' } } },
-  { type: 'message.part.updated', properties: { part: { messageID: 'm1', type: 'text', text: '我来执行' } } },
+  { type: 'message.part.updated', properties: { part: { sessionID: 'sess-1', messageID: 'm1', type: 'text', text: '我来执行' } } },
+  // 真实内核会先发工具 part，再发 MCP tools/call；consumeEvents 靠它确认调用属于本会话
+  { type: 'message.part.updated', properties: { part: { sessionID: 'sess-1', messageID: 'm1', type: 'tool', text: '' } } },
   { type: 'session.status', properties: { sessionID: 'sess-1', status: { type: 'idle' } } },
 ]
 
@@ -517,6 +547,78 @@ test('非流式：桥拦截到调用时返回 tool_calls（finish_reason=tool_ca
     assert.equal(choice.message.tool_calls[0].function.name, 'bash')
     assert.deepEqual(JSON.parse(choice.message.tool_calls[0].function.arguments), { command: 'ls' })
     assert.match(choice.message.tool_calls[0].id, /^call_/)
+    t.close()
+  } finally {
+    restore()
+  }
+})
+
+test('transport: 并行工具结果逐条回填（tool_call_id 不串味）', async () => {
+  const restore = installFakeFetch(TOOL_FRAMES)
+  try {
+    const kernel = fakeKernel({ frames: TOOL_FRAMES })
+    const bridge = makeSuspendingBridge([
+      { tool: 'bash', args: { command: 'echo A' } },
+      { tool: 'read', args: { path: 'B' } },
+    ])
+    const t = createKernelTransport({ kernel, bridge })
+    const msgs1 = [{ role: 'user', content: '并行跑两个工具' }]
+    const tools = [
+      { type: 'function', function: { name: 'bash', parameters: { type: 'object', properties: {} } } },
+      { type: 'function', function: { name: 'read', parameters: { type: 'object', properties: {} } } },
+    ]
+    const r1 = await t.chat({ model: 'chat-pro', messages: msgs1, user: 'conv-parallel', tools })
+    const toolCalls = r1.json.choices[0].message.tool_calls
+    assert.equal(toolCalls.length, 2)
+    assert.deepEqual(bridge.stats.ids, toolCalls.map((c) => c.id), '两个 tool_call_id 应绑定到两个挂起调用')
+
+    const r2 = await t.chat({
+      model: 'chat-pro',
+      user: 'conv-parallel',
+      messages: [
+        ...msgs1,
+        { role: 'assistant', content: null, tool_calls: toolCalls },
+        { role: 'tool', tool_call_id: toolCalls[0].id, name: 'bash', content: 'OUT-A' },
+        { role: 'tool', tool_call_id: toolCalls[1].id, name: 'read', content: 'OUT-B' },
+      ],
+    })
+    assert.equal(r2.status, 200)
+    assert.deepEqual(bridge.stats.results.map((r) => r.content), ['OUT-A', 'OUT-B'], '每条结果只应回给自己的调用')
+    assert.deepEqual(bridge.stats.results.map((r) => r.tool_call_id), toolCalls.map((c) => c.id))
+    t.close()
+  } finally {
+    restore()
+  }
+})
+
+test('transport: 纯文本请求跑到 idle 时不会取走别的会话的调用（标题生成回归）', async () => {
+  const restore = installFakeFetch(FRAMES)
+  try {
+    const kernel = fakeKernel({ frames: FRAMES })
+    // 桥上已有主会话挂起的调用；标题请求没有工具、也没有自己的 tool part
+    const bridge = makeFakeBridge([{ tool: 'bash', args: { command: 'ls' } }])
+    const t = createKernelTransport({ kernel, bridge })
+    const r = await t.chat({ model: 'chat-pro', user: 'conv-title', messages: [{ role: 'user', content: '生成标题' }] })
+    assert.equal(r.json.choices[0].finish_reason, 'stop')
+    assert.equal(r.json.choices[0].message.tool_calls, undefined, '标题请求不应返回工具调用')
+    assert.equal(bridge.hasCalls(), true, '主会话的调用应原样保留')
+    t.close()
+  } finally {
+    restore()
+  }
+})
+
+test('transport.chatStream: 纯文本请求跑到 idle 时不会取走别的会话的调用（标题生成回归）', async () => {
+  const restore = installFakeFetch(FRAMES)
+  try {
+    const kernel = fakeKernel({ frames: FRAMES })
+    const bridge = makeFakeBridge([{ tool: 'bash', args: { command: 'ls' } }])
+    const t = createKernelTransport({ kernel, bridge })
+    const res = await t.chatStream({ model: 'chat-pro', user: 'conv-title-stream', messages: [{ role: 'user', content: '生成标题' }] })
+    const body = await res.text()
+    assert.ok(body.includes('"finish_reason":"stop"'))
+    assert.ok(!body.includes('"tool_calls"'), '流式标题请求不应产出 tool_calls')
+    assert.equal(bridge.hasCalls(), true, '主会话的调用应原样保留')
     t.close()
   } finally {
     restore()
@@ -587,6 +689,52 @@ test('bridge: 工具调用被挂起（不立即返回），resolve 后以结果�
     await pending
     assert.equal(bridge.hasSuspended(), false)
     assert.ok(answered?.result?.content?.[0]?.text?.includes('hi'), '应把工具结果回给内核')
+  } finally {
+    await bridge.close()
+  }
+})
+
+test('bridge: 并行工具结果按 tool_call_id 各回各的（不再广播拼接文本）', async () => {
+  const bridge = await createMcpBridge()
+  try {
+    bridge.setTools([
+      { function: { name: 'bash', parameters: { type: 'object', properties: {} } } },
+      { function: { name: 'read', parameters: { type: 'object', properties: {} } } },
+    ])
+    const post = (body) => fetch(bridge.url, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+    })
+    await post({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05' } })
+
+    const waitCalled = async (n) => {
+      const started = Date.now()
+      while (bridge.stats.called < n && Date.now() - started < 1000) {
+        await new Promise((r) => setTimeout(r, 20))
+      }
+      assert.equal(bridge.stats.called, n, `应有 ${n} 个调用到达桥`)
+    }
+
+    const p1 = post({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'dsh_bash', arguments: { command: 'echo A' } } })
+      .then((r) => r.json())
+    await waitCalled(1)
+    const p2 = post({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'dsh_read', arguments: { path: 'B' } } })
+      .then((r) => r.json())
+    await waitCalled(2)
+    assert.equal(bridge.hasSuspended(), true, '两个调用都应处于挂起状态')
+
+    // 传输层拿到 tool_calls 后按顺序把 id 绑到挂起调用上
+    assert.equal(bridge.bindCallIds(['call_a', 'call_b']), 2)
+    const resolved = bridge.resolveSuspendedResults([
+      { tool_call_id: 'call_a', name: 'bash', content: 'OUT-A' },
+      { tool_call_id: 'call_b', name: 'read', content: 'OUT-B' },
+    ])
+    assert.equal(resolved, 2)
+    assert.equal(bridge.hasSuspended(), false)
+
+    const [a1, a2] = await Promise.all([p1, p2])
+    const textOf = (j) => j?.result?.content?.[0]?.text ?? ''
+    assert.equal(textOf(a1), JSON.stringify({ content: 'OUT-A', ok: true }), 'bash 只应拿到自己的结果')
+    assert.equal(textOf(a2), JSON.stringify({ content: 'OUT-B', ok: true }), 'read 只应拿到自己的结果')
   } finally {
     await bridge.close()
   }
@@ -983,6 +1131,49 @@ test('consumeEvents: 没有新事件时也会轮询工具桥（工具交接不�
   }
 })
 
+test('consumeEvents: 别的会话挂着工具调用时不会抢走本轮（标题生成回归）', async () => {
+  const original = globalThis.fetch
+  let release
+  const gate = new Promise((resolve) => { release = resolve })
+  globalThis.fetch = async () => {
+    const encoder = new TextEncoder()
+    const frames = [
+      { type: 'message.updated', properties: { info: { id: 'm1', role: 'assistant', sessionID: 'sess-1' } } },
+      { type: 'message.part.updated', properties: { part: { sessionID: 'sess-1', messageID: 'm1', type: 'text', text: '标题生成中' } } },
+      // 并发会话（标题生成）的工具 part：不属于本轮
+      { type: 'message.part.updated', properties: { part: { sessionID: 'sess-2', messageID: 'm2', type: 'tool', text: '' } } },
+    ]
+    const body = new ReadableStream({
+      async start(controller) {
+        for (const f of frames) controller.enqueue(encoder.encode(`data: ${JSON.stringify(f)}\n\n`))
+        await gate
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({
+          type: 'session.status', properties: { sessionID: 'sess-1', status: { type: 'idle' } },
+        })}\n\n`))
+        controller.close()
+      },
+    })
+    return new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream' } })
+  }
+  try {
+    const kernel = { base: 'http://127.0.0.1:1', authHeaders: () => ({}), request: async () => ({ status: 200, json: {}, text: '' }) }
+    const { consumeEvents } = await import('../lib/kernel.js')
+    let settled = false
+    // 全局桥里已经有调用（另一个请求的）——旧实现会在这里直接 break 抢走
+    const running = consumeEvents({ kernel, sessionID: 'sess-1', callWatcher: () => true })
+      .then((result) => { settled = true; return result })
+    await new Promise((r) => setTimeout(r, 500))
+    assert.equal(settled, false, '没看到本会话的工具 part 时不应把调用交给 DSH')
+    release()
+    const result = await running
+    assert.equal(result.interrupted, false, '应该等本会话自己的 idle')
+    assert.equal(result.text, '标题生成中')
+  } finally {
+    release?.()
+    globalThis.fetch = original
+  }
+})
+
 test('consumeEvents: session.error 立刻收尾并抛出内核错误（不再干等 idle）', async () => {
   const frames = [
     { type: 'message.updated', properties: { info: { id: 'u1', role: 'user', sessionID: 'sess-1' } } },
@@ -1021,9 +1212,9 @@ function makeLoopBridge({ startWithCall = true } = {}) {
 }
 
 test('transport: 续跑请求里没有工具结果时，放弃旧会话并重开（避免 session is busy）', async () => {
-  const restore = installFakeFetch(FRAMES)
+  const restore = installFakeFetch(TOOL_FRAMES)
   try {
-    const kernel = fakeKernel({ frames: FRAMES })
+    const kernel = fakeKernel({ frames: TOOL_FRAMES })
     const bridge = makeLoopBridge()
     const t = createKernelTransport({ kernel, bridge })
     const msgs1 = [{ role: 'system', content: 'S' }, { role: 'user', content: 'U1' }]
