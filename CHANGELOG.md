@@ -6,6 +6,42 @@
 
 ---
 
+## 0.11.6 — 2026-11-06
+
+### 修复：长时间无事件 → 宿主 5 分钟判 `terminated`，随后退避重试
+
+**现象**：一轮请求卡约 5 分钟后失败，失败原因 `terminated`（TRANSPORT），宿主按
+477ms → 1080ms 指数退避重试，用户感知为“频繁延迟”。
+
+**根因**：DSH 用 undici fetch 读本地 shim 的 SSE；undici 的 `bodyTimeout` 默认 **300000ms**。
+内核在长时间等待上游首个 token/下一段 reasoning 时不发任何事件，shim 也就静默，
+5 分钟一到连接被判 `terminated`。
+
+**修法**（`lib/shim.js`）：流式响应期间每 15s 写一行 SSE 注释帧 `: ping`，
+保持连接活跃；上游恢复/结束时正常转发并停止心跳。
+
+### 修复：额度不足（402/5005）识别成可读错误
+
+上游额度耗尽时返回：
+
+```json
+{"code":5005,"resultMsg":"用户额度不足"}
+```
+
+内核把它包成 `APIError`（`statusCode:402`、`responseBody` 上述 JSON）。此前插件只把
+`Payment Required` 抛给宿主，宿主无法识别为额度问题。现在会提取 `resultMsg`，
+输出 `insufficient quota: 用户额度不足 (HTTP 402/5005)` 并映射为 402，
+宿主按 `QUOTA_EXCEEDED` 处理（不重试、提示明确）。
+
+### 文档：新增「费用与积分」
+
+README 补充计费口径：输入 tokens（含工具 schema + 历史）× 模型倍率 + 输出 tokens；
+长会话 + 261 个工具时单步输入可达 10 万–36 万 tokens；并给出省钱建议。
+
+**验证**：新增 5 项单测（额度文案/编码、心跳帧、停止心跳）；`npm test` 238 全绿。
+
+---
+
 ## 0.11.5 — 2026-11-05
 
 ### 修复：跑测试/更新时会打开一次 TeleAgent 客户端
