@@ -6,6 +6,60 @@
 
 ---
 
+## 0.12.4 — 2026-11-07
+
+### 修复：空 Cookie 库被当成错误，sqlite3 的报错直接漏进终端
+
+**现象**：`npm run verify` 的输出里混进一行没有上下文的错误，夹在通过的测试之间像失败：
+
+```
+✔ listAccounts: 列出所有账号目录，标记当前账号 (81.670654ms)
+Error: in prepare, no such table: cookies
+✔ readOwnerFile: 读取 ownerDir 与 generation (2.659498ms)
+```
+
+**根因有两个**：
+
+1. `readCookiesFrom()` 用 `execFileSync` 调 `sqlite3` 时没指定 `stdio`，
+   默认 `'inherit'` 让子进程的 stderr **直接打到终端**；
+2. 空文件在 SQLite 眼里是合法空库，查询报 `no such table: cookies`（退出码 1），
+   被 `catch` 当成"读取失败"记进 bootlog。
+
+这不只是测试问题。真实环境同样会命中：Cookie 库**正在被桌面端写入**（复制出来是不完整快照）、
+**未初始化**、或该 Partition 从未登录过。这些都是**正常的空状态** ——
+`readPortalAuth()` 本来就返回 `null` 并走降级，不该当成故障。
+
+**修复**
+
+- `stdio: ['ignore', 'pipe', 'pipe']` 显式接管 stderr，报错不再漏到用户终端
+- 区分两类失败：
+  - `no such table` → 记录「库尚未初始化（属正常空状态）」，静默返回 `null`
+  - 其余（sqlite3 不存在、文件不可读、库损坏）→ 仍记 `读取 portal cookie 失败`
+
+### 新增：`doctor` 报告内核安全审核链路
+
+内核（`mcp_policy_review.go`）对每次 MCP 工具调用的**入参**和**输出**各做一次远端审核。
+实测**输出审核 100% 以 `context canceled` 结束**：
+
+```
+09:52:07.104  [mcp] policy review decision  result=1 action=allow     ← 输入审核通过
+09:52:11.107  [Error] policy review output request failed  err=...context canceled
+```
+
+`context canceled` 是"调用方已结束、请求还挂着"，**不是审核拒绝**，功能无损 ——
+但内核每次工具调用都刷一条 `[Error]`，某日 26 次调用产生 26 条，真实故障会被淹没。
+插件无法干预内核，但至少要让用户能分辨：
+
+- `doctor` 新增「内核安全审核」一项，统计当天审核次数、**取消**次数、**拒绝**次数
+- 取消不计为失败（`ok = 拒绝次数 === 0`），并在输出里写明"正常：调用方已结束，非拒绝"
+- 只有真的 `action=deny` 才判红并给出处置建议
+
+```
+✓ 内核安全审核   今日 26 次工具调用审核，26 次输出审核被取消（正常：调用方已结束，非拒绝）
+```
+
+---
+
 ## 0.12.3 — 2026-11-07
 
 ### 修复：token 统计全错 —— 每一步的输入都显示 0
