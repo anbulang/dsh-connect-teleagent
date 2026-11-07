@@ -177,6 +177,33 @@ test('claimForAccount: 不存在的账号也不抛错', async () => {
   assert.equal(r.ok, false)
 })
 
+// 回归：空 Cookies 文件是**正常的空状态**（Chromium 还没初始化该 Partition），
+// 但 sqlite3 会报 `no such table: cookies`，而 execFileSync 默认继承 stderr，
+// 于是 `Error: in prepare, ...` 直接漏进测试输出和用户终端，夹在通过的测试之间像失败。
+test('readPortalAuth: 空 Cookies 文件是空状态，静默返回 null', async () => {
+  const { readPortalAuth } = await import('../lib/portal.js')
+  const { home } = fakeHome()
+  const r = readPortalAuth(home, 'v1_public_100')
+  assert.equal(r, null, '空 cookie 库应返回 null（走降级），而不是抛错')
+})
+
+test('readPortalAuth: 真实格式的 cookie 库能读出 token', async () => {
+  const { readPortalAuth } = await import('../lib/portal.js')
+  const { execFileSync } = await import('node:child_process')
+  const { home } = fakeHome()
+  const db = path.join(home, '.local', 'share', 'TeleAgent', 'Partitions', 'owner%3Av1_public_100', 'Cookies')
+  try {
+    execFileSync('sqlite3', [db,
+      'create table cookies(name text, value text); ' +
+      "insert into cookies values('operationToken','op-abc'),('operToken','oper-xyz');",
+    ], { stdio: ['ignore', 'pipe', 'pipe'] })
+  } catch { return /* 环境没有 sqlite3 就跳过 */ }
+  const r = readPortalAuth(home, 'v1_public_100')
+  assert.ok(r, '应能读出 cookie')
+  assert.equal(r.operationToken, 'op-abc')
+  assert.equal(r.operToken, 'oper-xyz')
+})
+
 test('switchAccount: appRunning 传 PID 数组时也要认作"在运行"', () => {
   // 回归：isAppRunning() 返回的是 PID 数组，[] 是 truthy、[pid] 也不是 true，
   // 早期实现用 === true 判断，导致"桌面端在运行"这条保护完全失效。
