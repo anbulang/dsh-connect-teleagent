@@ -9,7 +9,7 @@ import assert from 'node:assert/strict'
 
 import {
   buildPermission, KERNEL_TOOLS, sealAuthState, resolveKernelBinary,
-  SessionStore, conversationKey, planTurn, contentToText, usageOf,
+  SessionStore, conversationKey, planTurn, contentToText, usageOf, usageOrUndefined,
   createKernelTransport, kernelErrorResult, materializeImages, normalizeUpstreamFailure,
 } from '../lib/kernel.js'
 
@@ -99,14 +99,64 @@ test('planTurn: 没有新消息时退化为重发最后一条用户输入', () =
   assert.equal(text, 'U2')
 })
 
-test('usageOf: 映射 kernel tokens 到 OpenAI usage', () => {
-  assert.deepEqual(usageOf({ input: 10, output: 5, total: 15, cache: { read: 3 } }), {
+test('usageOf: 缓存命中要算进 prompt_tokens（内核 input 不含缓存）', () => {
+  // 内核实测样本：total 是四项之和，input 只是未命中部分
+  // docs/DESIGN.md: {"total":15001,"input":150,"output":3,"cache":{"read":14848}}
+  assert.deepEqual(usageOf({ input: 150, output: 3, total: 15001, cache: { read: 14848, write: 0 } }), {
+    prompt_tokens: 14998, // 150 + 14848，DSH 再减去 cached 才得到真实的未命中量
+    completion_tokens: 3,
+    total_tokens: 15001,
+    prompt_tokens_details: { cached_tokens: 14848, cache_write_tokens: 0 },
+  })
+  // 回归：以前 prompt_tokens 只给 input，DSH 反算 max(0, input - cached) 恒为 0，
+  // 会话里每一步 inputTokens 都显示 0（实测 24 步里 13 步用量全 0）。
+  const u = usageOf({ input: 120, output: 40, total: 24000, cache: { read: 23840 } })
+  assert.equal(Math.max(0, u.prompt_tokens - u.prompt_tokens_details.cached_tokens), 120,
+    'DSH 反算出的未命中输入必须等于内核给的 input')
+})
+
+test('usageOf: 缓存写入也算进 prompt_tokens', () => {
+  const u = usageOf({ input: 10, output: 5, total: 100, cache: { read: 60, write: 25 } })
+  assert.equal(u.prompt_tokens, 95)
+  assert.equal(u.prompt_tokens_details.cached_tokens, 60)
+  assert.equal(u.prompt_tokens_details.cache_write_tokens, 25)
+})
+
+test('usageOf: 无缓存时保持原样（不能凭空加数）', () => {
+  assert.deepEqual(usageOf({ input: 10, output: 5, total: 15 }), {
     prompt_tokens: 10,
     completion_tokens: 5,
     total_tokens: 15,
-    prompt_tokens_details: { cached_tokens: 3 },
+    prompt_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 },
   })
   assert.equal(usageOf(undefined).total_tokens, 0)
+  assert.equal(usageOf(undefined).prompt_tokens, 0)
+})
+
+test('usageOf: 内核没给 total 时用四项之和补齐', () => {
+  const u = usageOf({ input: 7, output: 2, cache: { read: 30 } })
+  assert.equal(u.total_tokens, 39, '7 + 2 + 30')
+})
+
+// 工具调用触发提前收尾时，内核还没结算 token（实测晚 0.3~2.6 秒）。
+// 以前这种情况会发出 {prompt:0, completion:0, total:0}，宿主把它当真实用量，
+// 会话里 24 步有 13 步显示"没花任何 token"，成本表完全失真。
+test('usageOrUndefined: 没拿到 token 时整块省略，而不是发全 0', () => {
+  assert.equal(usageOrUndefined(undefined), undefined)
+  assert.equal(usageOrUndefined(null), undefined)
+  assert.equal(usageOrUndefined({}), undefined, '空对象等于没结算')
+  assert.equal(usageOrUndefined({ input: 0, output: 0 }), undefined, '全 0 等于没结算')
+})
+
+test('usageOrUndefined: 有真实用量时正常返回', () => {
+  assert.deepEqual(usageOrUndefined({ input: 120, output: 40, total: 24000, cache: { read: 23840 } }), {
+    prompt_tokens: 23960,
+    completion_tokens: 40,
+    total_tokens: 24000,
+    prompt_tokens_details: { cached_tokens: 23840, cache_write_tokens: 0 },
+  })
+  // 只有 output（推理型模型可能只报 output）也算拿到了
+  assert.equal(usageOrUndefined({ output: 137 })?.completion_tokens, 137)
 })
 
 test('SessionStore: TTL 过期后取不到，sweep 会清理', () => {
@@ -175,7 +225,57 @@ test('kernelErrorResult: 额度不足映射成 402 且文案可被 isQuotaExceed
 test('normalizeUpstreamFailure: 普通错误保留上游 detail', () => {
   const f = normalizeUpstreamFailure({ data: { message: 'Bad Gateway', responseBody: '{"resultMsg":"上游泛化错误"}' } })
   assert.equal(f.quota, false)
+  assert.equal(f.sensitive, false)
   assert.match(f.message, /上游泛化错误/)
+})
+
+// ------------------------------------------------------- 内容审核（finish_reason=sensitive）
+//
+// 线上事故（2026-11-07 09:52:58）：第二轮整轮被上游安全审核掐断，
+// 内核日志 `finish_reason=sensitive, interrupting` + `err: sensitive content detected`，
+// 透传出来的只有一句「内容包含敏感信息，已被中断」，没有任何业务码。
+// 结果被宿主的 classifyPiAiError 归成不可读、不可重试的 PI_AI_ERROR ——
+// 前面两步的抓取和排序结果全丢，用户不知道发生了什么，也不知道下一步该做什么。
+
+test('normalizeUpstreamFailure: 识别内核的内容审核中断（中文文案）', () => {
+  const f = normalizeUpstreamFailure({ data: { message: '内容包含敏感信息，已被中断' } })
+  assert.equal(f.sensitive, true)
+  assert.equal(f.quota, false)
+})
+
+test('normalizeUpstreamFailure: 识别内核日志里的 sensitive content detected', () => {
+  assert.equal(normalizeUpstreamFailure({ data: { message: 'sensitive content detected' } }).sensitive, true)
+  assert.equal(normalizeUpstreamFailure({ error: { message: 'finish_reason=sensitive' } }).sensitive, true)
+})
+
+test('normalizeUpstreamFailure: 普通错误不会被误判成敏感', () => {
+  assert.equal(normalizeUpstreamFailure({ data: { message: 'Bad Gateway' } }).sensitive, false)
+  assert.equal(normalizeUpstreamFailure({ data: { message: '模型暂不可用' } }).sensitive, false)
+  assert.equal(normalizeUpstreamFailure({ data: { message: '用户额度不足' } }).sensitive, false)
+})
+
+test('kernelErrorResult: 内容审核映射成 content_moderated + 可操作建议', () => {
+  // 模拟 consumeEvents 抛出的错误：文案透传 + contentSensitive 标记
+  const error = Object.assign(new Error('内容包含敏感信息，已被中断'), {
+    upstream: { data: { message: '内容包含敏感信息，已被中断' } },
+    contentSensitive: true,
+  })
+  const r = kernelErrorResult(error, 'chat-pro')
+  assert.equal(r.status, 400)
+  assert.equal(r.json.error.code, 'content_moderated')
+  assert.equal(r.json.error.sensitive, true)
+  assert.match(r.json.error.message, /内容被上游安全审核拦截/)
+  assert.match(r.json.error.message, /不是插件、网络或账号额度问题/, '要明确排除误诊')
+  assert.match(r.json.error.message, /重试同样的内容会被再次拦截/, '要说明不可重试')
+  assert.ok(r.json.error.message.length > 60, '必须给出可执行的下一步')
+})
+
+test('kernelErrorResult: 没有 sensitive 标记时不劫持普通错误', () => {
+  const r = kernelErrorResult(Object.assign(new Error('boom'), {
+    upstream: { data: { code: 40109, message: 'current user is banned' } },
+  }), 'chat-pro')
+  assert.equal(r.json.error.code, 40109, '封禁仍走原路径')
+  assert.equal(r.json.error.sensitive, undefined)
 })
 
 // ---------------------------------------------------------------- 传输映射
@@ -728,6 +828,99 @@ test('reapStaleKernels: 只清理 ppid=1 的自家内核，并清掉 pidfile', a
     assert.ok(killedSignals.some(([pid, sig]) => pid === 111 && sig === 'SIGTERM'))
     assert.ok(!killedSignals.some(([pid]) => pid === 222 || pid === 333), '不能误杀')
     assert.equal(fs.existsSync(kernelPidFile(dir)), false, 'pidfile 应被清掉')
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// 回归：曾经因为无条件杀 pidfile 里的 pid，把**另一个 DSH 正在用的内核**杀掉，
+// 正在进行的对话当场 `terminated`（TRANSPORT），宿主重试 5 次后整轮失败。
+// 触发者通常是跑测试 / doctor —— 它们也走 startKernel 并覆盖同一个 pidfile。
+
+test('reapStaleKernels: 宿主仍在运行时绝不杀它的内核（回归: terminated）', async () => {
+  const fs = await import('node:fs')
+  const os = await import('node:os')
+  const path = await import('node:path')
+  const { reapStaleKernels, kernelPidFile } = await import('../lib/kernel.js')
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ta-reap-live-'))
+  try {
+    const HOST_PID = 999
+    const KERNEL_PID = 555
+    fs.writeFileSync(kernelPidFile(dir), JSON.stringify({ pid: KERNEL_PID, hostPid: HOST_PID, port: 1, base: 'http://x' }))
+    const killedSignals = []
+    const result = await reapStaleKernels({
+      home: os.tmpdir(),
+      runtimeDir: dir,
+      binary: '/apps/super-agent-code/bin/TeleAgent',
+      wait: async () => {},
+      isAlive: (pid) => [HOST_PID, KERNEL_PID].includes(pid),
+      listProcesses: () => [
+        { pid: KERNEL_PID, ppid: HOST_PID, command: '/apps/super-agent-code/bin/TeleAgent' },
+      ],
+      killProcess: (pid, signal) => killedSignals.push([pid, signal]),
+    })
+    assert.deepEqual(result.killed, [], '另一个活宿主的内核不能被清理')
+    assert.deepEqual(killedSignals, [], '不能发出任何信号')
+    assert.equal(result.skipped.length, 1, '应把它记成跳过')
+    assert.equal(result.skipped[0].reason, 'host-alive')
+    assert.equal(fs.existsSync(kernelPidFile(dir)), true, 'pidfile 属于活宿主，不能删')
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('reapStaleKernels: 宿主已退出后仍然会清理遗留内核', async () => {
+  const fs = await import('node:fs')
+  const os = await import('node:os')
+  const path = await import('node:path')
+  const { reapStaleKernels, kernelPidFile } = await import('../lib/kernel.js')
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ta-reap-dead-'))
+  try {
+    const KERNEL_PID = 555
+    fs.writeFileSync(kernelPidFile(dir), JSON.stringify({ pid: KERNEL_PID, hostPid: 999, port: 1, base: 'http://x' }))
+    const killedSignals = []
+    const result = await reapStaleKernels({
+      home: os.tmpdir(),
+      runtimeDir: dir,
+      binary: '/apps/super-agent-code/bin/TeleAgent',
+      wait: async () => {},
+      // 宿主 999 已经不在了，只剩内核
+      isAlive: (pid) => pid === KERNEL_PID,
+      listProcesses: () => [],
+      killProcess: (pid, signal) => killedSignals.push([pid, signal]),
+    })
+    assert.deepEqual(result.killed, [KERNEL_PID], '宿主已死时遗留内核要清掉')
+    assert.ok(killedSignals.some(([pid, sig]) => pid === KERNEL_PID && sig === 'SIGTERM'))
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('reapStaleKernels: 老格式 pidfile（没有 hostPid）靠父进程存活判断', async () => {
+  const fs = await import('node:fs')
+  const os = await import('node:os')
+  const path = await import('node:path')
+  const { reapStaleKernels, kernelPidFile } = await import('../lib/kernel.js')
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ta-reap-legacy-'))
+  try {
+    const KERNEL_PID = 555
+    const LIVE_HOST = 888
+    fs.writeFileSync(kernelPidFile(dir), JSON.stringify({ pid: KERNEL_PID, port: 1, base: 'http://x' }))
+    const killedSignals = []
+    const result = await reapStaleKernels({
+      home: os.tmpdir(),
+      runtimeDir: dir,
+      binary: '/apps/super-agent-code/bin/TeleAgent',
+      wait: async () => {},
+      isAlive: (pid) => [KERNEL_PID, LIVE_HOST].includes(pid),
+      listProcesses: () => [
+        { pid: KERNEL_PID, ppid: LIVE_HOST, command: '/apps/super-agent-code/bin/TeleAgent' },
+      ],
+      killProcess: (pid, signal) => killedSignals.push([pid, signal]),
+    })
+    assert.deepEqual(result.killed, [], '父进程还活着就不能杀')
+    assert.deepEqual(killedSignals, [])
+    assert.equal(result.skipped[0].reason, 'ppid-alive')
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
   }

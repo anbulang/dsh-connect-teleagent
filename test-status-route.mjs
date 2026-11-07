@@ -19,6 +19,21 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 const SRC = path.join(path.dirname(fileURLToPath(import.meta.url)), 'lib')
 const ROOT = path.join(os.tmpdir(), 'te-harness')
 
+// ---------------------------------------------------------------- 隔离 HOME
+//
+// **必须在 import lib/index.js 之前设置。**
+//
+// 本测试真的调用 `apply()`，而 `apply()` 会 `reapStaleKernels()` + `startKernel()`，
+// 两者都按 `process.env.HOME` 定位 `~/.dsh-teleagent-kernel/`。不隔离的话：
+//   1. 会把用户真正在用的 DSH 内核当成"遗留内核"杀掉 →
+//      正在进行的对话当场 `terminated`（TRANSPORT），重试 5 次后失败；
+//   2. 会用测试内核覆盖真实的 kernel.pid，并污染 ~/.dsh 下的设置与日志。
+//
+// 用一个临时 HOME，让整条装配链路都跑在沙箱里，绝不碰真实运行状态。
+const ISOLATED_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'te-status-home-'))
+process.env.HOME = ISOLATED_HOME
+process.env.DSH_HOME = path.join(ISOLATED_HOME, '.dsh')
+
 // ---------------------------------------------------------------- 准备桩依赖
 fs.rmSync(ROOT, { recursive: true, force: true })
 fs.mkdirSync(path.join(ROOT, 'lib'), { recursive: true })
@@ -161,6 +176,9 @@ try {
   await dispose?.()
 } catch { /* ignore */ }
 await new Promise((r) => setTimeout(r, 300))
+
+// 删掉本次隔离的临时 HOME（内核进程已停，剩下的只是配置/日志/pidfile）
+try { fs.rmSync(ISOLATED_HOME, { recursive: true, force: true }) } catch { /* ignore */ }
 
 console.log(failed.length ? `  红：${failed.length} 项失败` : '  绿：全部通过')
 process.exit(failed.length ? 1 : 0)

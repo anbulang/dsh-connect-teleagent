@@ -6,6 +6,141 @@
 
 ---
 
+## 0.12.3 — 2026-11-07
+
+### 修复：token 统计全错 —— 每一步的输入都显示 0
+
+**现象**：会话详情里 `inputTokens` 恒为 0，上下文用量表完全失真；
+24 步的对话里有 13 步的用量显示 `{0, 0, 0}`，看起来"这步没花任何积分"。
+
+**根因有两个，叠加成一个必然的错**
+
+1. `usageOf()` 把内核的 `input` 直接当 `prompt_tokens` 上报了。
+   可内核的 `input` **不含缓存命中**，缓存是单独的 `cache.read`：
+
+   ```
+   docs/DESIGN.md 实测样本：
+   {"total":15001,"input":150,"output":3,"cache":{"read":14848}}
+   15001 = 150 + 3 + 14848
+   ```
+
+   DSH 的 openai-completions 适配器按 OpenAI 语义反算
+   `input = max(0, prompt_tokens - cached_tokens - cacheWrite)`，
+   拿到的却是 `max(0, 150 - 14848) = 0` —— 每一步都被钳到 0。
+
+   真实数据（该会话 seq 45）：`{input:0, output:137, total:24137, cacheRead:24000}`，
+   说明内核算得对，是插件映射错了。
+
+2. 工具调用触发 `callWatcher` 后，本轮回**提前收尾**（不等内核 idle），
+   而内核的 `[cost] tokens(...)` 要晚 0.3~2.6 秒才出现：
+
+   ```
+   本机实测（2026-11-07 会话）：
+   seq17 收尾 07:45:15.612  →  内核计费 07:45:15.972  (晚 360ms)
+   seq24 收尾 07:45:35.711  →  内核计费 07:45:38.341  (晚 2.6s)
+   ```
+
+   这时 `tokens` 还是 `undefined`，旧代码照样发 `{prompt:0, completion:0, total:0}`。
+
+**修复**
+
+- `usageOf()`：`prompt_tokens = input + cache.read + cache.write`，
+  `total_tokens` 用四项之和兜底，`prompt_tokens_details` 同时给
+  `cached_tokens` 与 `cache_write_tokens`。DSH 反算后的未命中量现在等于内核的 `input`。
+- 新增 `usageOrUndefined()`：拿不到 token（undefined / 空对象 / 全 0）时
+  **整块省略 `usage`**，而不是发一个全 0 的假账。OpenAI 协议里 usage 本就是可选的。
+  不去等内核结算 —— 每一步工具调用多付 0.3~2.6 秒不值得。
+
+### 修复：内容被安全审核拦截时，整轮变成不可读的 `PI_AI_ERROR`
+
+**现象**：对话跑到一半突然整轮失败，界面只有一句
+「`内容包含敏感信息，已被中断`」，宿主标成 `PI_AI_ERROR` 且不重试。
+前面几步已经抓到的数据全部作废，用户既不知道发生了什么，也不知道下一步该做什么。
+
+**根因**：这是上游的 `finish_reason=sensitive`，内核日志里写得很清楚：
+
+```
+09:52:58.912  processor.go:546  [Warn] [process] finish_reason=sensitive, interrupting
+09:52:58.913  processor.go:2156 err: sensitive content detected
+```
+
+但内核**不给业务码**，只透传中文文案。插件 `kernelErrorResult()` 的兜底逻辑
+只认封禁/凭据/签名/限流/额度，对这句文案匹配不上任何模式，就落到
+`code: 'kernel_error'`；DSH 的 `classifyPiAiError` 同样匹配不上，最终归为
+不可读、不可重试的 `PI_AI_ERROR`。
+
+**修复**
+
+- `normalizeUpstreamFailure()` 新增 `sensitive` 判定，覆盖三种真实文案：
+  内核日志的 `sensitive content detected`、事件里的 `finish_reason=sensitive`、
+  以及对外的「内容包含敏感信息，已被中断」。同时补上 `{error:{message}}` /
+  `{error:{data:{message}}}` 两种载荷形状（以前只读 `data.message`，正好漏掉这两种）。
+- `consumeEvents()` 把判定结果以 `error.contentSensitive = true` 带到抛出点。
+- `kernelErrorResult()` 把它映射成独立错误码 `content_moderated`（HTTP 400，非重试），
+  文案明确三件事：**不是**插件/网络/额度问题、重试同样内容会被**再次拦截**、
+  以及三个可执行的下一步（换措辞 / 拆小命令 / 换数据来源）。
+
+---
+
+## 0.12.2 — 2026-11-07
+
+### 修复：跑测试/自检会把 DSH 正在用的内核杀掉，导致对话报 `terminated`
+
+**现象**：对话突然失败，界面显示 `重试延迟：7473毫秒 / 失败原因：terminated`，
+宿主按指数退避重试 5 次（约 0.5s → 1s → 2s → 4.4s → 7.5s）后整轮失败。
+插件本身"看起来是好的"（`/status` 200、内核 ready），但一发消息就断。
+
+**根因是两个缺陷叠加**
+
+1. `startKernel()` 把内核 pid 写进**固定的** `$HOME/.dsh-teleagent-kernel/kernel.pid`，
+   不区分是哪个宿主拉起的；
+2. `reapStaleKernels()` 启动时**无条件**杀掉 pidfile 里的 pid，认为它一定是"上一次的遗孤"。
+
+于是任何**也调用了 `startKernel()` 的第二方**（`npm run verify` 里的
+`test-status-route.mjs`、`node lib/doctor.js`）一启动，就会：
+
+- 用自己的测试内核覆盖真实的 `kernel.pid`；
+- 把 DSH 正在使用的那颗内核当成"遗留内核"`SIGTERM` → `SIGKILL`。
+
+对 DSH 来说，内核在**请求进行中**消失，SSE 流被掐断，pi-ai 归类为
+`TRANSPORT/terminated`，进入重试；重试时内核已换了身份，会话状态对不上，于是连续失败。
+
+**证据**（本机日志，时间戳一一对应，精确到毫秒）：
+
+```
+18:10:32.383  已清理遗留内核 {"pids":[47060]}
+18:10:32.400  llm/retry 1  TRANSPORT terminated      ← 17ms 后本轮断流
+18:11:02.806  已清理遗留内核 {"pids":[14741]}
+18:11:02.820  llm/retry 2  TRANSPORT terminated
+18:11:15.433  已清理遗留内核 {"pids":[21215]}
+18:11:15.445  llm/retry 3  TRANSPORT terminated
+18:11:27.936  已清理遗留内核 {"pids":[22997]}
+18:11:27.947  llm/retry 4  TRANSPORT terminated
+18:11:42.574  已清理遗留内核 {"pids":[24130]}
+18:11:42.586  llm/retry 5  TRANSPORT terminated
+18:12:07.322  turn/end {"message":"terminated","code":"TRANSPORT"}
+```
+
+同一分钟内连续 5 次"清理遗留内核"，对应 5 次 `terminated`——不是网络问题，是自己杀自己。
+
+**修复**
+
+- `startKernel()` 在 pidfile 里新增 `hostPid`（拉起它的宿主进程），可据此判断归属
+- `reapStaleKernels()` 改为**只回收孤儿**：
+  - `hostPid` 仍存活 → 判定为"别人的活内核"，**跳过**（记入新增的 `skipped` 返回值）
+  - 老格式 pidfile（无 `hostPid`）→ 退回看父进程是否存活（`ppid-alive`）
+  - 宿主已退出 / `ppid=1` 孤儿 → 仍然照常清理（原有行为不变）
+  - 跳过时**不删除** pidfile，否则那个宿主会失去追踪能力
+- `test-status-route.mjs` 在 import 插件前把 `HOME`/`DSH_HOME` 指向临时目录，
+  整条装配链路跑在沙箱里，绝不碰真实运行状态
+- `lib/doctor.js` 用独立 `runtimeDir` 起测试内核，自检不再覆盖真实 `kernel.pid`
+
+**验证**：`npm test` 265 全绿（新增 3 项 reap 回归）；`verify` 5 套件全绿；
+跑完全量测试后 DSH 的内核（pid 43101）仍在运行、pidfile 未被改写；
+真实端到端对话通过（隔离内核，4.1s 返回）；修复后日志 0 错误。
+
+---
+
 ## 0.12.1 — 2026-11-06
 
 ### 新增：设置页可配置工具白名单
