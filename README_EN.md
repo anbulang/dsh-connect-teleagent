@@ -75,15 +75,63 @@ dsh plugin --profile web add github:anbulang/dsh-connect-teleagent
 ### C. Release tarball
 
 Download `dsh-connect-teleagent-<version>.tgz` from
-[Releases](https://github.com/anbulang/dsh-connect-teleagent/releases/latest), unpack it into
-`~/.dsh/plugins/dsh-connect-teleagent/`, or use the bundled scripts:
+[Releases](https://github.com/anbulang/dsh-connect-teleagent/releases/latest) (the archive holds
+the plugin only — it does **not** ship `scripts/`) and unpack it into the plugin directory:
 
 ```bash
-bash scripts/install.sh
-bash scripts/uninstall.sh
+mkdir -p ~/.dsh/plugins/dsh-connect-teleagent
+tar -xzf dsh-connect-teleagent-<version>.tgz --strip-components=1 \
+  -C ~/.dsh/plugins/dsh-connect-teleagent      # strip the archive's top-level package/ prefix
 ```
 
-Restart DeepSeek Harness after installing.
+**Unpacking is only step one**: DSH does not discover that directory on its own, and you still
+need **two registrations** in the profile (the repository's `scripts/install.sh` does exactly
+these two things — when working from a git checkout you can just run `bash scripts/install.sh`
+and it copies and registers in one go). To do it by hand, edit
+`~/.dsh/profiles/desktop/package.json` (substitute your profile name if it is not `desktop`):
+
+```jsonc
+{
+  "dependencies": {
+    "dsh-connect-teleagent": "file:/Users/<you>/.dsh/plugins/dsh-connect-teleagent"
+  },
+  "dsh": {
+    "profile": {
+      "bundles": [
+        // …leave the existing bundles untouched…
+        "dsh-connect-teleagent"          // ← append to the end of the list
+      ]
+    }
+  }
+}
+```
+
+1. **`dependencies`** — a `file:` spec pointing at the plugin directory (an absolute path;
+   `~` is expanded too).
+2. **`dsh.profile.bundles`** — append the package name to this ordered list; only bundles listed
+   there are loaded. The plugin's own `cordis.patch.yml` takes effect through the bundle
+   mechanism, so you do **not** need to hand-write `- id: dsh-connect-teleagent` in the profile's
+   `cordis.patch.yml`.
+
+Then install the profile dependencies inside the profile directory (this is what the Plugins page
+does in the background):
+
+```bash
+cd ~/.dsh/profiles/desktop && pnpm install
+```
+
+> `desktop` is reserved for the desktop app, and `dsh plugin --profile desktop ...` is rejected,
+> so use pnpm directly.
+
+Finally **quit DeepSeek Harness completely and restart it**; the five TeleAgent models appear
+under *Settings → Models*.
+
+Skipping either step fails differently — "the directory exists" is not evidence it works:
+
+| Missing | Symptom |
+|---|---|
+| `dependencies` | stderr prints `skipping profile bundle "dsh-connect-teleagent": … cannot resolve profile bundle …` at startup and the plugin never loads (DSH still boots, so it is easy to miss) |
+| `dsh.profile.bundles` | the package is installed but never activated — the model list still has no TeleAgent |
 
 ### Upstream apiKey
 
@@ -183,21 +231,55 @@ DSH (pi-ai) ──OpenAI──► loopback shim (127.0.0.1:random port)
 
 ## Configuration
 
-Stored in `$DSH_HOME/teleagent-plugin.json` (default `~/.dsh/teleagent-plugin.json`),
-editable from the DSH settings card:
+Configuration comes in **two kinds**, stored in different places. Mixing them up fails silently
+(the value simply has no effect):
+
+| Kind | Location | Read/written by | Fields |
+|---|---|---|---|
+| **Persisted settings** | `$DSH_HOME/teleagent-plugin.json` (default `~/.dsh/teleagent-plugin.json`) | the plugin itself; the settings card writes it | `enabledModelIds`, `providerDisabled`, `toolsAllowlist`, `welfare` |
+| **Runtime configuration** | the `config:` of this plugin's entry in the profile's `cordis.patch.yml` | the host, passed to `apply(ctx, config)` | `transport`, `guard`, `kernelAllowedTools`, `denyBuiltinTools`, `kernelReadyTimeoutMs`, `toolBridge`, `baseUrl`/`timeoutMs`, `probeOnBoot`/`probeTimeoutMs`, `ui.allowChatProbe`, `welfare.*` |
+
+### Persisted settings (`~/.dsh/teleagent-plugin.json`)
+
+You normally never edit this by hand — *Settings → Plugins → TeleAgent* writes it. If you do edit
+it, keep **only** these fields; runtime fields (such as `transport`) are ignored there:
 
 ```jsonc
 {
-  "transport": "kernel",
-  "kernelAllowedTools": [],
-  "denyBuiltinTools": true,
-  "kernelReadyTimeoutMs": 60000,
-  "enabledModelIds": [],
-  "guard": { "maxConcurrent": 2, "failureThreshold": 3, "cooldownMs": 600000 }
+  "enabledModelIds": ["chat-pro", "chat-flash"],  // [] = all enabled
+  "providerDisabled": false,                      // true = provider off (disappears from the picker)
+  "toolsAllowlist": null,                         // null/[] = send everything; array = only matches
+  "welfare": { "autoClaimDaily": true }           // daily credit auto-claim
 }
 ```
 
-Environment: `TELEAGENT_KERNEL_PORT` (default 47823), `TELEAGENT_API_KEY`.
+> Precedence note: `enabledModelIds` is **config > store** (an explicit host config beats the
+> card), while `toolsAllowlist` is **store > config** (the card edits it, so a value saved in the
+> UI must actually take effect).
+
+### Runtime configuration (the profile's `cordis.patch.yml`)
+
+**Switching transport, kernel options and guard thresholds only works here** — the plugin reads
+them from `config` during `apply()`, so writing them into `teleagent-plugin.json` does nothing.
+Edit `~/.dsh/profiles/desktop/cordis.patch.yml`:
+
+```yaml
+- id: dsh-connect-teleagent
+  name: dsh-connect-teleagent
+  config:
+    transport: kernel              # kernel (default) or direct
+    kernelAllowedTools: []         # extra tools the kernel may execute (empty by default)
+    denyBuiltinTools: true         # deny kernel built-ins; only DSH's MCP tools remain
+    kernelReadyTimeoutMs: 60000
+    toolBridge: true               # false = disable the DSH tool bridge entirely
+    guard: { maxConcurrent: 2, failureThreshold: 3, cooldownMs: 600000 }
+```
+
+Restart DeepSeek Harness afterwards: these `config` values are read once, during `apply()` at
+startup. (`toolsAllowlist`, `enabledModelIds`, `providerDisabled` and `welfare.autoClaimDaily` are
+the exceptions — they are persisted settings from the table above and re-read on every request.)
+
+Environment (read at startup): `TELEAGENT_KERNEL_PORT` (default 47823), `TELEAGENT_API_KEY`.
 
 ## Credits
 
@@ -248,7 +330,7 @@ Edit it in **Settings → Plugins → TeleAgent → Models → Tool allowlist** 
 
 ```bash
 node lib/doctor.js          # environment / login / signature / model catalog checks
-npm test                    # 262 unit tests (no real kernel)
+npm test                    # full unit suite (no real kernel)
 npm run verify              # unit + CLI + status routes + shim shape + routes + UI render
 ```
 

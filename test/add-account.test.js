@@ -370,6 +370,85 @@ test('runAddAccountFlow: 上次崩溃留下的备份会先恢复再开始', asyn
   assert.equal(fs.existsSync(backupFilePath(home)), false)
 })
 
+// ---------------------------------------------------------------- DSH home 与数据 home
+
+// 回归：`$DSH_HOME` 指向非默认目录时，备份清单必须和启动恢复走同一个路径。
+// 以前 `runAddAccountFlow` 把 `process.env.HOME` 显式传给 `dshHome(home)`，
+// `$DSH_HOME` 被忽略 → 清单写到 `$HOME/.dsh`；而启动时 `restorePendingBackup()`
+// 无参调用走 `$DSH_HOME` 解析，两边对不上，崩溃后原账号登录就丢了。
+
+test('备份清单跟随 $DSH_HOME，而不是固定 $HOME/.dsh', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'teleagent-dshhome-'))
+  const customDsh = path.join(base, 'custom-dsh-home')
+  const savedHome = process.env.HOME
+  const savedDsh = process.env.DSH_HOME
+  try {
+    fs.mkdirSync(customDsh, { recursive: true })
+    process.env.HOME = base
+    process.env.DSH_HOME = customDsh
+
+    // 生产路径：不传 home，让 store.js 按 $DSH_HOME 解析
+    assert.equal(
+      backupFilePath(),
+      path.join(customDsh, 'teleagent-login-backup.json'),
+      '清单必须落在 $DSH_HOME 下',
+    )
+    assert.notEqual(
+      backupFilePath(),
+      path.join(base, '.dsh', 'teleagent-login-backup.json'),
+      '不能落到 $HOME/.dsh',
+    )
+  } finally {
+    if (savedHome === undefined) delete process.env.HOME; else process.env.HOME = savedHome
+    if (savedDsh === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = savedDsh
+    fs.rmSync(base, { recursive: true, force: true })
+  }
+})
+
+test('写入与启动恢复用同一个清单路径（$DSH_HOME 非默认时也能自愈）', () => {
+  const { home } = fakeHome()
+  const customDsh = path.join(home, 'custom-dsh-home')
+  const savedDsh = process.env.DSH_HOME
+  const savedHome = process.env.HOME
+  try {
+    fs.mkdirSync(customDsh, { recursive: true })
+    process.env.DSH_HOME = customDsh
+    // 生产形态：数据 home 就是 $HOME，DSH home 被重定向到 $DSH_HOME
+    process.env.HOME = home
+    const manifestPath = path.join(customDsh, 'teleagent-login-backup.json')
+    assert.equal(
+      backupFilePath(),
+      manifestPath,
+      '不传 home 时清单应跟随 $DSH_HOME',
+    )
+
+    const originalA = fs.readFileSync(tokenPath(home, SCOPE_A), 'utf8')
+    createPendingBackup({ scope: SCOPE_A })
+    assert.ok(fs.existsSync(manifestPath), '清单应写在 $DSH_HOME')
+    assert.equal(
+      fs.existsSync(path.join(home, '.dsh', 'teleagent-login-backup.json')),
+      false,
+      '不能写到 $HOME/.dsh',
+    )
+
+    // 模拟崩溃后重启：index.js 用无参 restorePendingBackup() 自愈
+    removeToken(home, SCOPE_A)
+    const restored = restorePendingBackup()
+    assert.equal(restored.restored, true, '启动恢复必须能找到清单')
+    assert.equal(fs.readFileSync(tokenPath(home, SCOPE_A), 'utf8'), originalA)
+  } finally {
+    if (savedDsh === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = savedDsh
+    if (savedHome === undefined) delete process.env.HOME; else process.env.HOME = savedHome
+  }
+})
+
+test('显式传 home 时仍写到 home/.dsh（测试隔离语义不变）', () => {
+  const { home } = fakeHome()
+  const r = createPendingBackup({ home, scope: SCOPE_A })
+  assert.equal(r.created, true)
+  assert.equal(r.backupFile, path.join(home, '.dsh', 'teleagent-login-backup.json'))
+})
+
 // ---------------------------------------------------------------- 状态单例
 
 test('status: 没有进行中的流程时，状态可读且取消返回可读错误', () => {

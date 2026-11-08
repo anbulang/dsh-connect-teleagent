@@ -166,6 +166,123 @@ if (login?.handler) {
   server2.close()
 }
 
+// ---------------------------------------------------------------- CSRF 端到端
+//
+// 回归：写接口只校验 Host 时，任意网页都能对本机地址发一个「简单请求」
+// （text/plain POST，不触发预检）静默清空白名单。这里真跑 HTTP 验证：
+// 跨源被拒、同源正常。
+
+if (toolsRoute?.handler) {
+  const srv = http.createServer((req, res) => {
+    // Host 是真实的回环地址（攻击者无法伪造——它由浏览器/网络栈填入）
+    req.headers.host = `127.0.0.1:${srv.address().port}`
+    Promise.resolve(toolsRoute.handler(req, res)).catch((e) => { res.writeHead(500); res.end(String(e)) })
+  })
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r))
+  const port3 = srv.address().port
+  const url = `http://127.0.0.1:${port3}/plugins/dsh-connect-teleagent/tools`
+
+  // 攻击者页面：跨源 + text/plain（浏览器 simple request，无预检）
+  const evil = await fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'text/plain', origin: 'https://evil.example' },
+    body: JSON.stringify({ toolsAllowlist: null }),
+  })
+  ok('跨源 text/plain POST 被拒绝', evil.status === 403, `HTTP ${evil.status} ${(await evil.text()).slice(0, 80)}`)
+
+  // 跨源 + application/json（真实恶意站会走预检，这里直接断言兜底 403）
+  const evilJson = await fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', origin: 'https://evil.example' },
+    body: JSON.stringify({ toolsAllowlist: null }),
+  })
+  ok('跨源 application/json POST 被拒绝', evilJson.status === 403, `HTTP ${evilJson.status}`)
+
+  // 同源但非 JSON content-type：挡住「靠 content-type 绕过同源判断」的路径
+  const wrongType = await fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', origin: `http://127.0.0.1:${port3}` },
+    body: 'toolsAllowlist=null',
+  })
+  ok('同源非 JSON content-type 返回 415', wrongType.status === 415, `HTTP ${wrongType.status}`)
+
+  // 同源正常调用必须继续可用（真界面就是这么发的）
+  const good = await fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', origin: `http://127.0.0.1:${port3}` },
+    body: JSON.stringify({ toolsAllowlist: ['bash'] }),
+  })
+  const goodBody = await good.json().catch(() => null)
+  ok('同源 JSON POST 仍然成功', good.status === 200 && goodBody?.ok === true, `HTTP ${good.status} ${JSON.stringify(goodBody ?? {}).slice(0, 80)}`)
+
+  srv.close()
+}
+
+// ---------------------------------------------------------------- 同源 / content-type 单元断言
+//
+// 这些是不起 HTTP 的纯函数断言，专门覆盖 `sameOriginRequest` / `mutationGuard`
+// 的边界：Origin 缺失、"null"、端口归一、content-type 变体。
+// 上面的端到端用例只覆盖主路径，边界靠这里兜住。
+
+const { sameOriginRequest, mutationGuard } = await import(pathToFileURL(path.join(ROOT, 'lib', 'status.js')).href)
+
+function fakeReqV({ host = '127.0.0.1:52200', origin, contentType, body } = {}) {
+  const headers = { host }
+  if (origin !== undefined) headers.origin = origin
+  if (contentType !== undefined) headers['content-type'] = contentType
+  const raw = body === undefined ? '' : body
+  headers['content-length'] = String(Buffer.byteLength(raw))
+  return { headers }
+}
+
+function fakeRes() {
+  const out = { status: null, headers: null, body: null }
+  return {
+    out,
+    writeHead(status, headers) { out.status = status; out.headers = headers },
+    end(body) { out.body = body === undefined ? null : String(body) },
+  }
+}
+
+ok('无 Origin（curl/CLI）放行', sameOriginRequest(fakeReqV()) === true)
+ok('同源 Origin 放行', sameOriginRequest(fakeReqV({ origin: 'http://127.0.0.1:52200' })) === true)
+ok('localhost 同源放行', sameOriginRequest(fakeReqV({ host: 'localhost:52200', origin: 'http://localhost:52200' })) === true)
+ok('都省略端口时按默认端口归一', sameOriginRequest(fakeReqV({ host: '127.0.0.1', origin: 'http://127.0.0.1' })) === true)
+ok('端口不同不算同源', sameOriginRequest(fakeReqV({ host: '127.0.0.1:52200', origin: 'http://127.0.0.1' })) === false)
+ok('跨源 Origin 被拒', sameOriginRequest(fakeReqV({ origin: 'https://evil.example' })) === false)
+ok('Origin: null（沙箱 iframe）被拒', sameOriginRequest(fakeReqV({ origin: 'null' })) === false)
+ok('file:// Origin 被拒', sameOriginRequest(fakeReqV({ origin: 'file://' })) === false)
+ok('畸形 Origin 被拒', sameOriginRequest(fakeReqV({ origin: 'not a url' })) === false)
+
+{
+  const res = fakeRes()
+  const pass = mutationGuard(fakeReqV({ origin: 'https://evil.example', contentType: 'text/plain', body: '{}' }), res)
+  ok('mutationGuard: 跨源 403', pass === false && res.out.status === 403, String(res.out.status))
+}
+{
+  let allRejected = true
+  for (const ct of ['text/plain', 'application/x-www-form-urlencoded', 'multipart/form-data', undefined]) {
+    const res = fakeRes()
+    const pass = mutationGuard(fakeReqV({ origin: 'http://127.0.0.1:52200', contentType: ct, body: '{}' }), res)
+    if (pass !== false || res.out.status !== 415) allRejected = false
+  }
+  ok('mutationGuard: 同源非 JSON → 415', allRejected)
+}
+{
+  let allPassed = true
+  for (const ct of ['application/json', 'application/json; charset=utf-8', 'Application/JSON']) {
+    const res = fakeRes()
+    if (mutationGuard(fakeReqV({ origin: 'http://127.0.0.1:52200', contentType: ct, body: '{}' }), res) !== true) allPassed = false
+    if (res.out.status !== null) allPassed = false
+  }
+  ok('mutationGuard: 同源 JSON 放行（含 charset/大小写）', allPassed)
+}
+{
+  const res = fakeRes()
+  const pass = mutationGuard(fakeReqV({ origin: 'http://127.0.0.1:52200' }), res)
+  ok('mutationGuard: 无 body 空 POST 放行', pass === true && res.out.status === null)
+}
+
 console.log('\n状态路由反馈回路')
 console.log('─'.repeat(56))
 for (const x of report) console.log(`  ${x.c ? '✓' : '✗'} ${x.n.padEnd(28)} ${x.d}`)

@@ -76,15 +76,57 @@ dsh plugin --profile web add github:anbulang/dsh-connect-teleagent
 ### 方式 C：Release 离线包
 
 从 [Releases](https://github.com/anbulang/dsh-connect-teleagent/releases/latest) 下载
-`dsh-connect-teleagent-<version>.tgz`，解压到 `~/.dsh/plugins/dsh-connect-teleagent/`，
-或用仓库里的安装脚本：
+`dsh-connect-teleagent-<version>.tgz`（包里只有插件本体，**不含** `scripts/`），解压到插件目录：
 
 ```bash
-bash scripts/install.sh      # 复制到 ~/.dsh/plugins 并写入 profile
-bash scripts/uninstall.sh    # 卸载
+mkdir -p ~/.dsh/plugins/dsh-connect-teleagent
+tar -xzf dsh-connect-teleagent-<version>.tgz --strip-components=1 \
+  -C ~/.dsh/plugins/dsh-connect-teleagent      # 去掉 tar 包顶层的 package/ 前缀
 ```
 
-安装后**完全退出并重启 DeepSeek Harness**；「设置 → 模型」里即可看到 TeleAgent 的 5 个模型。
+**但解压只是第一步**：DSH 不会自动发现这个目录，还要在 profile 里做**两处注册**
+（仓库里的 `scripts/install.sh` 做的正是这两件事 —— 从 git 检出运行时可以直接
+`bash scripts/install.sh`，它会连复制带注册一起做）。手工做的话，编辑
+`~/.dsh/profiles/desktop/package.json`（profile 名不是 `desktop` 时换成你的）：
+
+```jsonc
+{
+  "dependencies": {
+    "dsh-connect-teleagent": "file:/Users/<你>/.dsh/plugins/dsh-connect-teleagent"
+  },
+  "dsh": {
+    "profile": {
+      "bundles": [
+        // ……原有的 bundle 保持不动……
+        "dsh-connect-teleagent"          // ← 追加到列表末尾
+      ]
+    }
+  }
+}
+```
+
+1. **`dependencies`**：`file:` 指向插件目录的**绝对路径**（用 `~` 也可以，DSH 会展开）。
+2. **`dsh.profile.bundles`**：把包名追加进这个有序列表 —— 只有列表里的 bundle 才会被加载；
+   插件自带的 `cordis.patch.yml` 会经 bundle 机制自动生效，**不需要**再在 profile 的
+   `cordis.patch.yml` 里手写一条 `- id: dsh-connect-teleagent`。
+
+改完 `package.json` 后，在该 profile 目录里装一次依赖（Plugins 页在后台做的也是这件事）：
+
+```bash
+cd ~/.dsh/profiles/desktop && pnpm install
+```
+
+> `desktop` 是 DSH 保留给桌面端的 profile，`dsh plugin --profile desktop ...` 会被拒绝，
+> 所以这里直接用 pnpm。
+
+最后**完全退出并重启 DeepSeek Harness**；「设置 → 模型」里即可看到 TeleAgent 的 5 个模型。
+
+漏掉任一步的后果不一样，别只看"插件目录在不在"：
+
+| 漏掉 | 现象 |
+|---|---|
+| `dependencies` | 启动时 stderr 打印 `skipping profile bundle "dsh-connect-teleagent": … cannot resolve profile bundle …`，插件不加载（DSH 仍能启动，所以很容易被忽略） |
+| `dsh.profile.bundles` | 包装上了但从不激活 —— 模型列表里同样没有 TeleAgent |
 
 ### 上游 apiKey
 
@@ -178,21 +220,53 @@ DSH (pi-ai) ──OpenAI──► loopback shim (127.0.0.1:随机端口)
 
 ## 配置
 
-设置保存在 `$DSH_HOME/teleagent-plugin.json`（默认 `~/.dsh/teleagent-plugin.json`），
-并可通过 DSH 设置卡片编辑：
+配置分**两类**，存放位置不同，不要混在一起（写错地方不会报错，只是不生效）：
+
+| 类别 | 存放位置 | 由谁读写 | 包含字段 |
+|---|---|---|---|
+| **持久化设置** | `$DSH_HOME/teleagent-plugin.json`（默认 `~/.dsh/teleagent-plugin.json`） | 插件自己；设置卡片可写 | `enabledModelIds`、`providerDisabled`、`toolsAllowlist`、`welfare` |
+| **运行时配置** | profile 的 `cordis.patch.yml` 里本插件条目的 `config:` | 宿主在 `apply(ctx, config)` 时传入 | `transport`、`guard`、`kernelAllowedTools`、`denyBuiltinTools`、`kernelReadyTimeoutMs`、`toolBridge`、`baseUrl`/`timeoutMs`、`probeOnBoot`/`probeTimeoutMs`、`ui.allowChatProbe`、`welfare.*` |
+
+### 持久化设置（`~/.dsh/teleagent-plugin.json`）
+
+正常不需要手改 —— 「设置 → 插件 → TeleAgent」卡片会写它。手工编辑时注意**只放这几个字段**，
+文件里出现运行时字段（如 `transport`）会被忽略：
 
 ```jsonc
 {
-  "transport": "kernel",          // kernel（默认）或 direct
-  "kernelAllowedTools": [],       // 允许内核额外执行的工具（默认空）
-  "denyBuiltinTools": true,       // 默认禁止内核自带工具，只走 DSH 的 MCP 工具
-  "kernelReadyTimeoutMs": 60000,
-  "enabledModelIds": [],          // 空数组 = 全部启用
-  "guard": { "maxConcurrent": 2, "failureThreshold": 3, "cooldownMs": 600000 }
+  "enabledModelIds": ["chat-pro", "chat-flash"],  // 空数组 = 全部启用
+  "providerDisabled": false,                      // true = 整体停用（模型选择器里消失）
+  "toolsAllowlist": null,                         // null/[] = 全发；数组 = 只发匹配项
+  "welfare": { "autoClaimDaily": true }           // 积分自动领取
 }
 ```
 
-环境变量：`TELEAGENT_KERNEL_PORT`（内核端口，默认 47823）、`TELEAGENT_API_KEY`（上游 apiKey）。
+> 优先级补充：`enabledModelIds` 是 **config > store**（宿主显式配置压过卡片勾选）；
+> `toolsAllowlist` 是 **store > config**（卡片能改它，所以用户保存的值必须真正生效）。
+
+### 运行时配置（profile 的 `cordis.patch.yml`）
+
+**改传输方式、内核参数、防护阈值只能走这里** —— 插件只在 `apply()` 时从 `config` 读这些值，
+写进 `teleagent-plugin.json` 不会生效。编辑 `~/.dsh/profiles/desktop/cordis.patch.yml`：
+
+```yaml
+- id: dsh-connect-teleagent
+  name: dsh-connect-teleagent
+  config:
+    transport: kernel              # kernel（默认）或 direct
+    kernelAllowedTools: []         # 允许内核额外执行的工具（默认空）
+    denyBuiltinTools: true         # 默认禁止内核自带工具，只走 DSH 的 MCP 工具
+    kernelReadyTimeoutMs: 60000
+    toolBridge: true               # false = 完全不启用 DSH 工具桥
+    guard: { maxConcurrent: 2, failureThreshold: 3, cooldownMs: 600000 }
+```
+
+改完需**重启 DeepSeek Harness**：上表这些 `config` 值只在 `apply()` 启动时读一次。
+（`toolsAllowlist`、`enabledModelIds`、`providerDisabled`、`welfare.autoClaimDaily` 是例外 ——
+它们来自上面那张表里的持久化设置，每轮请求热读取。）
+
+环境变量（不分来源，启动时读取）：`TELEAGENT_KERNEL_PORT`（内核端口，默认 47823）、
+`TELEAGENT_API_KEY`（上游 apiKey）。
 
 ## 积分
 
@@ -247,7 +321,7 @@ DSH 会把**所有插件**的工具都塞进每次请求（实测 255 个，sche
 
 ```bash
 node lib/doctor.js          # 环境/登录态/签名/模型目录自检（--json 可机器读）
-npm test                    # 262 个单元测试（不启动真内核）
+npm test                    # 全部单元测试（不启动真内核）
 npm run verify              # 单测 + CLI + 状态路由 + shim 形态 + 路由 + 卡片渲染（6 套件）
 ```
 

@@ -926,6 +926,166 @@ test('reapStaleKernels: 老格式 pidfile（没有 hostPid）靠父进程存活�
   }
 })
 
+// ---------------------------------------------------------------- PID 复用（宿主身份）
+
+// 回归：pid 只是编号，进程退出后会被系统复用。上个宿主崩溃、pid 又被无关进程
+// 占用时，只看 `alive(hostPid)` 会把它误判成「另一个活宿主」→ 孤儿内核被 skip，
+// 而收尾的 filter 又排除 skipped 的 pid → 永远没人给它发信号，
+// DSH 退出后内核继续空转（无人值守的真实流量）。
+
+test('reapStaleKernels: 宿主 pid 活着但身份不符（pid 被复用）→ 按孤儿清理', async () => {
+  const fs = await import('node:fs')
+  const os = await import('node:os')
+  const path = await import('node:path')
+  const { reapStaleKernels, kernelPidFile } = await import('../lib/kernel.js')
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ta-reap-reused-'))
+  try {
+    const RECORDED_HOST = 4242   // 这号现在被无关进程占着
+    const KERNEL_PID = 5151
+    fs.writeFileSync(kernelPidFile(dir), JSON.stringify({
+      pid: KERNEL_PID, hostPid: RECORDED_HOST, hostStartToken: 'ps-lstart:boot-A', port: 1, base: 'http://x',
+    }))
+    const killedSignals = []
+    const result = await reapStaleKernels({
+      home: os.tmpdir(),
+      runtimeDir: dir,
+      binary: '/apps/super-agent-code/bin/TeleAgent',
+      wait: async () => {},
+      isAlive: (pid) => [RECORDED_HOST, KERNEL_PID].includes(pid),
+      listProcesses: () => [
+        { pid: KERNEL_PID, ppid: 1, command: '/apps/super-agent-code/bin/TeleAgent' },
+      ],
+      // 4242 现在的身份是另一个进程（启动标识不同）
+      readStartToken: (pid) => (pid === RECORDED_HOST ? 'ps-lstart:boot-B' : null),
+      killProcess: (pid, signal) => killedSignals.push([pid, signal]),
+    })
+    assert.deepEqual(result.killed, [KERNEL_PID], 'pid 复用时必须把孤儿内核清掉')
+    assert.deepEqual(result.skipped, [], '不能再记成 host-alive')
+    assert.ok(killedSignals.some(([pid, sig]) => pid === KERNEL_PID && sig === 'SIGTERM'))
+    assert.equal(fs.existsSync(kernelPidFile(dir)), false, 'pidfile 应被清掉')
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('reapStaleKernels: 宿主 pid 活着且身份匹配 → 仍然绝不杀', async () => {
+  const fs = await import('node:fs')
+  const os = await import('node:os')
+  const path = await import('node:path')
+  const { reapStaleKernels, kernelPidFile } = await import('../lib/kernel.js')
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ta-reap-match-'))
+  try {
+    const HOST_PID = 999
+    const KERNEL_PID = 555
+    fs.writeFileSync(kernelPidFile(dir), JSON.stringify({
+      pid: KERNEL_PID, hostPid: HOST_PID, hostStartToken: 'ps-lstart:boot-A', port: 1, base: 'http://x',
+    }))
+    const killedSignals = []
+    const result = await reapStaleKernels({
+      home: os.tmpdir(),
+      runtimeDir: dir,
+      binary: '/apps/super-agent-code/bin/TeleAgent',
+      wait: async () => {},
+      isAlive: (pid) => [HOST_PID, KERNEL_PID].includes(pid),
+      listProcesses: () => [
+        { pid: KERNEL_PID, ppid: HOST_PID, command: '/apps/super-agent-code/bin/TeleAgent' },
+      ],
+      readStartToken: (pid) => (pid === HOST_PID ? 'ps-lstart:boot-A' : null),
+      killProcess: (pid, signal) => killedSignals.push([pid, signal]),
+    })
+    assert.deepEqual(result.killed, [], '身份匹配的活宿主内核不能被清理')
+    assert.deepEqual(killedSignals, [], '不能发出任何信号')
+    assert.equal(result.skipped[0].reason, 'host-alive')
+    assert.equal(fs.existsSync(kernelPidFile(dir)), true, 'pidfile 属于活宿主，不能删')
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('reapStaleKernels: 取不到进程身份（平台降级）时保守跳过，绝不误杀', async () => {
+  const fs = await import('node:fs')
+  const os = await import('node:os')
+  const path = await import('node:path')
+  const { reapStaleKernels, kernelPidFile } = await import('../lib/kernel.js')
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ta-reap-degraded-'))
+  try {
+    const HOST_PID = 999
+    const KERNEL_PID = 555
+    fs.writeFileSync(kernelPidFile(dir), JSON.stringify({
+      pid: KERNEL_PID, hostPid: HOST_PID, hostStartToken: 'ps-lstart:boot-A', port: 1, base: 'http://x',
+    }))
+    const killedSignals = []
+    const result = await reapStaleKernels({
+      home: os.tmpdir(),
+      runtimeDir: dir,
+      binary: '/apps/super-agent-code/bin/TeleAgent',
+      wait: async () => {},
+      isAlive: (pid) => [HOST_PID, KERNEL_PID].includes(pid),
+      // 内核没有被 reparent，父进程就是记录里的宿主
+      listProcesses: () => [
+        { pid: KERNEL_PID, ppid: HOST_PID, command: '/apps/super-agent-code/bin/TeleAgent' },
+      ],
+      // 平台没有能力取启动标识（例如 Windows 没有 ps）
+      readStartToken: () => null,
+      killProcess: (pid, signal) => killedSignals.push([pid, signal]),
+    })
+    assert.deepEqual(result.killed, [], '身份未知时必须保守，不能误杀另一个宿主的活内核')
+    assert.deepEqual(killedSignals, [])
+    assert.equal(result.skipped[0].reason, 'host-alive')
+    assert.equal(result.skipped[0].hostIdentity, 'unknown')
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('reapStaleKernels: 老格式 pidfile + 内核已 reparent 成孤儿 → 宿主 pid 必是复用', async () => {
+  const fs = await import('node:fs')
+  const os = await import('node:os')
+  const path = await import('node:path')
+  const { reapStaleKernels, kernelPidFile } = await import('../lib/kernel.js')
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ta-reap-legacy-orphan-'))
+  try {
+    const RECORDED_HOST = 4242
+    const KERNEL_PID = 5151
+    // 老格式：没有 hostStartToken，无法比对身份
+    fs.writeFileSync(kernelPidFile(dir), JSON.stringify({ pid: KERNEL_PID, hostPid: RECORDED_HOST, port: 1, base: 'http://x' }))
+    const killedSignals = []
+    const result = await reapStaleKernels({
+      home: os.tmpdir(),
+      runtimeDir: dir,
+      binary: '/apps/super-agent-code/bin/TeleAgent',
+      wait: async () => {},
+      isAlive: (pid) => [RECORDED_HOST, KERNEL_PID].includes(pid),
+      // 内核 ppid=1：它爹早没了。而 pidfile 说宿主的 pid 还活着 → 那个 pid 已被复用
+      listProcesses: () => [
+        { pid: KERNEL_PID, ppid: 1, command: '/apps/super-agent-code/bin/TeleAgent' },
+      ],
+      readStartToken: () => null,
+      killProcess: (pid, signal) => killedSignals.push([pid, signal]),
+    })
+    assert.deepEqual(result.killed, [KERNEL_PID], '内核已成孤儿 + 宿主 pid 活着 = pid 复用，要清理')
+    assert.ok(killedSignals.some(([pid, sig]) => pid === KERNEL_PID && sig === 'SIGTERM'))
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('processStartToken: 同一进程两次读取一致，且是稳定字符串', async () => {
+  const { processStartToken } = await import('../lib/kernel.js')
+  const first = processStartToken(process.pid)
+  const second = processStartToken(process.pid)
+  if (first === null) {
+    // 平台能力不足：显式降级为 null，绝不能瞎编一个值
+    assert.equal(second, null)
+    return
+  }
+  assert.equal(typeof first, 'string')
+  assert.ok(first.length > 0)
+  assert.equal(first, second, '启动标识在同一进程内必须稳定')
+  // 不存在的 pid 取不到身份
+  assert.equal(processStartToken(2 ** 22 + 12345), null)
+})
+
 // ---------------------------------------------------------------- 思维链（reasoning）透传
 
 const REASONING_FRAMES = [
