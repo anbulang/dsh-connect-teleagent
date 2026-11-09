@@ -48,7 +48,7 @@ test('sealAuthState: 产出 v1 信封，字段齐全且可带 key 解回', async
 
 test('resolveKernelBinary: 指向 desktop 的 super-agent-code', () => {
   const bin = resolveKernelBinary('/Users/x')
-  assert.match(bin, /runtimes\/super-agent-code\/bin\/TeleAgent$/)
+  assert.match(bin, /runtimes[/\\]super-agent-code[/\\]bin[/\\]TeleAgent(?:\.exe)?$/)
 })
 
 test('contentToText: 兼容 string 与数组内容', () => {
@@ -390,6 +390,28 @@ test('transport: prompt_async 失败时返回可分类的错误而不是抛到 s
     assert.equal(r.status, 401)
     assert.equal(r.json.error.code, 40109)
     t.close()
+  } finally {
+    restore()
+  }
+})
+
+test('kernel prompt includes a platform-valid file URL for images', async () => {
+  const restore = installFakeFetch(TOOL_FRAMES)
+  try {
+    const kernel = fakeKernel({ frames: TOOL_FRAMES })
+    const transport = createKernelTransport({ kernel })
+    const result = await transport.chat({
+      model: 'chat-pro',
+      messages: [{ role: 'user', content: [
+        { type: 'text', text: '看图' },
+        { type: 'image_url', image_url: { url: 'data:image/png;base64,iVBORw0KGgo=' } },
+      ] }],
+    })
+    assert.equal(result.status, 200)
+    const prompt = kernel.calls.find((call) => call.path.endsWith('/prompt_async'))
+    const image = prompt.body.parts.find((part) => part.type === 'file')
+    assert.match(image.url, /^file:\/\/\/[^\\]+$/)
+    transport.close()
   } finally {
     restore()
   }
@@ -810,6 +832,7 @@ test('reapStaleKernels: 只清理 ppid=1 的自家内核，并清掉 pidfile', a
     fs.writeFileSync(kernelPidFile(dir), JSON.stringify({ pid: 555, port: 1, base: 'http://x' }))
     const killedSignals = []
     const result = await reapStaleKernels({
+      platform: 'darwin',
       home: os.tmpdir(),
       runtimeDir: dir,
       binary: '/apps/super-agent-code/bin/TeleAgent',
@@ -849,6 +872,7 @@ test('reapStaleKernels: 宿主仍在运行时绝不杀它的内核（回归: ter
     fs.writeFileSync(kernelPidFile(dir), JSON.stringify({ pid: KERNEL_PID, hostPid: HOST_PID, port: 1, base: 'http://x' }))
     const killedSignals = []
     const result = await reapStaleKernels({
+      platform: 'darwin',
       home: os.tmpdir(),
       runtimeDir: dir,
       binary: '/apps/super-agent-code/bin/TeleAgent',
@@ -880,6 +904,7 @@ test('reapStaleKernels: 宿主已退出后仍然会清理遗留内核', async ()
     fs.writeFileSync(kernelPidFile(dir), JSON.stringify({ pid: KERNEL_PID, hostPid: 999, port: 1, base: 'http://x' }))
     const killedSignals = []
     const result = await reapStaleKernels({
+      platform: 'darwin',
       home: os.tmpdir(),
       runtimeDir: dir,
       binary: '/apps/super-agent-code/bin/TeleAgent',
@@ -908,6 +933,7 @@ test('reapStaleKernels: 老格式 pidfile（没有 hostPid）靠父进程存活�
     fs.writeFileSync(kernelPidFile(dir), JSON.stringify({ pid: KERNEL_PID, port: 1, base: 'http://x' }))
     const killedSignals = []
     const result = await reapStaleKernels({
+      platform: 'darwin',
       home: os.tmpdir(),
       runtimeDir: dir,
       binary: '/apps/super-agent-code/bin/TeleAgent',

@@ -2,7 +2,7 @@
   <a href="https://github.com/anbulang/dsh-connect-teleagent/releases/latest"><img alt="release" src="https://img.shields.io/github/v/release/anbulang/dsh-connect-teleagent?label=release&color=2ea44f"></a>
   <a href="https://github.com/anbulang/dsh-connect-teleagent/blob/main/package.json"><img alt="version" src="https://img.shields.io/badge/version-0.12.0-blue"></a>
   <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-purple"></a>
-  <a href="https://github.com/anbulang/dsh-connect-teleagent"><img alt="platform" src="https://img.shields.io/badge/platform-macOS-lightgrey"></a>
+  <a href="https://github.com/anbulang/dsh-connect-teleagent"><img alt="platform" src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey"></a>
   <a href="https://github.com/anbulang/dsh-connect-teleagent"><img alt="dsh" src="https://img.shields.io/badge/DSH-0.2.1--rc.1%2B-orange"></a>
   <a href="https://github.com/anbulang/dsh-connect-teleagent"><img alt="index" src="https://img.shields.io/badge/index-format--1-blueviolet"></a>
   <a href="https://github.com/anbulang/dsh-connect-teleagent"><img alt="tests" src="https://img.shields.io/badge/tests-262%20passing-brightgreen"></a>
@@ -48,9 +48,16 @@
 
 ## 前置条件
 
-1. macOS 已安装并**登录** TeleAgent 桌面版（`/Applications/TeleAgent.app`，桌面端只有 macOS）
+1. 在 macOS 或 Windows 安装 **TeleAgent 2.7.1 或更高版本**，至少启动一次并登录。
 2. DeepSeek Harness **0.2.1-rc.1+**（能打开「插件 → 发现」即可）
 3. 按下面「上游 apiKey」在本机配置网关 apiKey
+
+`dsh-connect-teleagent doctor --json` 和插件诊断栏会显示实际安装版本。版本过低或无法读取时，模型接入会暂停。
+
+Windows 需用登录 TeleAgent 的同一个 Windows 用户运行 DSH。安装在自定义目录时，可在启动 DSH 前设置
+`$env:TELEAGENT_APP_PATH = 'D:\Apps\TeleAgent\TeleAgent.exe'`。独立运行 CLI 需要 Node.js 22.19+（22.x）或 24+。
+
+Windows 上 TeleAgent 运行时会锁定积分 Cookie 数据库。首次登录后打开一次积分福利页，再完全退出 TeleAgent，即可让插件读取积分凭据。
 
 未登录时插件会提示「TeleAgent 尚未登录」；登录完成后**不需要重启 DSH**，凭据变更会自动生效。
 
@@ -77,7 +84,7 @@ dsh plugin --profile web add github:anbulang/dsh-connect-teleagent
 
 从 [Releases](https://github.com/anbulang/dsh-connect-teleagent/releases/latest) 下载
 `dsh-connect-teleagent-<version>.tgz`，解压到 `~/.dsh/plugins/dsh-connect-teleagent/`，
-或用仓库里的安装脚本：
+macOS 也可以用仓库里的安装脚本：
 
 ```bash
 bash scripts/install.sh      # 复制到 ~/.dsh/plugins 并写入 profile
@@ -257,7 +264,6 @@ npm run verify              # 单测 + CLI + 状态路由 + shim 形态 + 路由
 
 ## 已知限制
 
-- **仅 macOS**：TeleAgent 桌面端只提供 macOS 版
 - **图片输入**：只有 `chat-pro` / `chat-flash` 支持；`chat-lite` 会胡编，`chat-nano` / `chat-flagship` 明确拒绝
 - **依赖逆向**：上游协议/内核升级可能需要适配（`node lib/doctor.js` 会先暴露签名问题）
 - **模型行为**：部分模型会把过程叙述直接写进正文（不是插件的渲染问题）

@@ -8,9 +8,9 @@
  */
 import { createRequire } from 'node:module'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
-const require = createRequire('/tmp/uicheck/package.json')
+const require = createRequire(path.resolve(process.env.DSH_UI_TEST_DEPS ?? '/tmp/uicheck', 'package.json'))
 let React
 let renderToStaticMarkup
 try {
@@ -32,7 +32,7 @@ globalThis.window = {
 }
 
 const here = path.dirname(fileURLToPath(import.meta.url))
-await import(path.join(here, 'lib', 'client.js'))
+await import(pathToFileURL(path.join(here, 'lib', 'client.js')).href)
 
 if (!captured) {
   console.error('模块没有调用 __ModuleLoader__.load')
@@ -110,6 +110,19 @@ const scenarios = [
     name: '载入失败',
     props: { error: 'HTTP 404' },
     expect: ['无法读取插件状态', 'HTTP 404', '重试'],
+  },
+  {
+    name: '桌面端版本过低',
+    props: {
+      status: {
+        auth: { signedIn: false, reason: 'TeleAgent 2.7.0 低于最低要求 2.7.1', remedy: '升级到 TeleAgent 2.7.1 或更高版本' },
+        desktop: { ok: false, version: '2.7.0', minVersion: '2.7.1', detail: 'TeleAgent 2.7.0 低于最低要求 2.7.1' },
+        account: { canAddAccount: false },
+        capabilities: { addAccount: true },
+        models: baseModels,
+      },
+    },
+    expect: ['TeleAgent 2.7.0 低于最低要求 2.7.1', '升级到 TeleAgent 2.7.1 或更高版本', '去登录'],
   },
   {
     name: '健康已登录',

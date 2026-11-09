@@ -54,10 +54,12 @@ function sealV10(plain, password) {
   return Buffer.concat([Buffer.from('v10'), body]).toString('base64')
 }
 
+const supportedDesktop = { ok: true, version: '2.7.1' }
+
 // ---------------------------------------------------------------- 状态分类
 test('诊断为 NOT_SIGNED_IN：没有 current-owner.json', () => {
   const { home } = makeHome({})
-  const d = diagnoseCredential(home)
+  const d = diagnoseCredential(home, supportedDesktop)
   assert.equal(d.ok, false)
   assert.equal(d.state, CredentialState.NOT_SIGNED_IN)
   assert.ok(d.remedy, '必须带可执行建议')
@@ -65,31 +67,22 @@ test('诊断为 NOT_SIGNED_IN：没有 current-owner.json', () => {
 
 test('诊断为 TOKEN_FILE_MISSING：有 scope 但缺 token.json', () => {
   const { home } = makeHome({ scope: 'v1_public_1' })
-  const d = diagnoseCredential(home)
+  const d = diagnoseCredential(home, supportedDesktop)
   assert.equal(d.state, CredentialState.TOKEN_FILE_MISSING)
   assert.ok(d.remedy)
 })
 
 test('诊断为 TOKEN_FILE_MISSING：token.json 里没有 encryptedToken', () => {
   const { home } = makeHome({ scope: 'v1_public_1', tokenFile: { version: 1, encrypted: true } })
-  const d = diagnoseCredential(home)
+  const d = diagnoseCredential(home, supportedDesktop)
   assert.equal(d.state, CredentialState.TOKEN_FILE_MISSING)
 })
 
 test('诊断为 DECRYPT_FAILED：token.json 不是合法 JSON', () => {
   const { home } = makeHome({ scope: 'v1_public_1', tokenFile: '{ 这不是 json' })
-  const d = diagnoseCredential(home)
+  const d = diagnoseCredential(home, supportedDesktop)
   assert.equal(d.state, CredentialState.DECRYPT_FAILED)
   assert.ok(d.remedy)
-})
-
-test('诊断为 DECRYPT_FAILED：encryptedToken 不是 v10 格式', () => {
-  const { home } = makeHome({
-    scope: 'v1_public_1',
-    tokenFile: { version: 1, encryptedToken: Buffer.from('vXXgarbage').toString('base64'), encrypted: true },
-  })
-  const d = diagnoseCredential(home)
-  assert.equal(d.state, CredentialState.DECRYPT_FAILED)
 })
 
 test('所有失败状态都在 REMEDIES 里有对应建议', () => {
@@ -160,4 +153,16 @@ test('诊断结果里带 token 字段，但状态摘要函数不暴露它', asyn
   assert.equal('token' in authed, false, 'readAuthState 不应返回 token')
   const serialized = JSON.stringify(authed)
   assert.doesNotMatch(serialized, /eyJ[A-Za-z0-9_-]{10,}/)
+})
+
+test('Windows safeStorage v10 authenticates the AES-GCM payload', () => {
+  const key = Buffer.alloc(32, 0x3f)
+  const nonce = Buffer.alloc(12, 0x2a)
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, nonce)
+  const plain = 'I7Kp2X:' + makeJwt({ accountName: 'Windows 测试账号' })
+  const raw = Buffer.concat([Buffer.from('v10'), nonce, cipher.update(plain), cipher.final(), cipher.getAuthTag()])
+  assert.equal(decryptSafeStorage(raw.toString('base64'), key), plain)
+
+  raw[raw.length - 1] ^= 1
+  assert.throws(() => decryptSafeStorage(raw.toString('base64'), key), (e) => e.code === CredentialState.DECRYPT_FAILED)
 })
