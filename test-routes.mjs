@@ -14,8 +14,11 @@ const ok = (n, c, d='') => report.push({ n, c, d })
 
 // 隔离的 HOME，避免污染真实设置
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'tagent-routes-'))
-const prevHome = process.env.HOME
 process.env.HOME = home
+process.env.USERPROFILE = home
+process.env.DSH_HOME = path.join(home, '.dsh')
+delete process.env.TELEAI_TA_DEVICE_DATA_DIR
+delete process.env.TELEAGENT_CONFIG_DIR
 
 const routes = new Map()
 const webServer = {
@@ -317,7 +320,6 @@ disposed()
 ok('路由可注销', routes.size === 0, '剩余路由=' + routes.size)
 
 server.close()
-process.env.HOME = prevHome
 
 console.log('\n路由测试')
 console.log('─'.repeat(56))

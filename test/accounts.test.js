@@ -189,15 +189,17 @@ test('readPortalAuth: 空 Cookies 文件是空状态，静默返回 null', async
 
 test('readPortalAuth: 真实格式的 cookie 库能读出 token', async () => {
   const { readPortalAuth } = await import('../lib/portal.js')
-  const { execFileSync } = await import('node:child_process')
+  const { DatabaseSync } = await import('node:sqlite')
   const { home } = fakeHome()
   const db = path.join(home, '.local', 'share', 'TeleAgent', 'Partitions', 'owner%3Av1_public_100', 'Cookies')
+  const sqlite = new DatabaseSync(db)
   try {
-    execFileSync('sqlite3', [db,
-      'create table cookies(name text, value text); ' +
-      "insert into cookies values('operationToken','op-abc'),('operToken','oper-xyz');",
-    ], { stdio: ['ignore', 'pipe', 'pipe'] })
-  } catch { return /* 环境没有 sqlite3 就跳过 */ }
+    sqlite.exec('create table cookies(name text, value text, host_key text, encrypted_value blob, creation_utc integer); ' +
+      "insert into cookies values('operationToken','op-abc','agent.teleai.com.cn',NULL,13438710481134143)," +
+      "('operToken','oper-xyz','.teleai.com.cn',NULL,13438710481134143);")
+  } finally {
+    sqlite.close()
+  }
   const r = readPortalAuth(home, 'v1_public_100')
   assert.ok(r, '应能读出 cookie')
   assert.equal(r.operationToken, 'op-abc')
@@ -300,4 +302,20 @@ test('deleteAccount: 不存在的账号返回可读错误', () => {
   const r = deleteAccount({ scope: 'v1_public_999', home })
   assert.equal(r.ok, false)
   assert.match(r.reason, /没有这个账号/)
+})
+
+test('readPortalAuth: reads the Network/Cookies database in a newer Electron partition', async () => {
+  const { readPortalAuth } = await import('../lib/portal.js')
+  const { DatabaseSync } = await import('node:sqlite')
+  const { home } = fakeHome()
+  const partition = path.join(home, '.local', 'share', 'TeleAgent', 'Partitions', 'owner%3Av1_public_100')
+  const network = path.join(partition, 'Network')
+  fs.mkdirSync(network)
+  const db = new DatabaseSync(path.join(network, 'Cookies'))
+  try {
+    db.exec("create table cookies(name text, value text, host_key text, encrypted_value blob); insert into cookies values ('operationToken','op-network','agent.teleai.com.cn',NULL);")
+  } finally {
+    db.close()
+  }
+  assert.equal(readPortalAuth(home, 'v1_public_100')?.operationToken, 'op-network')
 })
