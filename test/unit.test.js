@@ -392,3 +392,135 @@ test('teleagent_points: 注入假 portal 时返回结构化数据', async () => 
   assert.match(text, /123\.45/)
   assert.match(text, /今日可领/)
 })
+
+// ------------------------------------------------------------ 工具白名单优先级（PR12-r1）
+
+test('pickToolsAllowlist: store 有值压过 config（设置卡片保存的值必须生效）', async () => {
+  const { pickToolsAllowlist } = await import('../lib/index.js')
+  // 设置卡片写的是 store；config 是 profile 里写死的。卡片保存后必须听 store。
+  assert.deepEqual(pickToolsAllowlist({ store: ['web_*'], config: ['bash', 'read'] }), ['web_*'])
+  // 卡片"恢复全量"写 null → 也必须生效，回落到 config
+  assert.deepEqual(pickToolsAllowlist({ store: null, config: ['bash', 'read'] }), ['bash', 'read'])
+  // 两边都没写 → 全发
+  assert.equal(pickToolsAllowlist({ store: null, config: null }), null)
+  assert.equal(pickToolsAllowlist({}), null)
+  // 非数组（例如手写坏了）当作没配置
+  assert.deepEqual(pickToolsAllowlist({ store: 'oops', config: ['bash'] }), ['bash'])
+})
+
+test('pickToolsAllowlist: 空数组是有效值（= 全发），不会被当成"没配置"', async () => {
+  const { pickToolsAllowlist } = await import('../lib/index.js')
+  assert.deepEqual(pickToolsAllowlist({ store: [], config: ['bash'] }), [], '空数组即用户显式选择全发')
+})
+
+// ------------------------------------------------------------ 工具桥挂载状态（PR7-r3）
+//
+// 背景：mcp-bridge 的 mount() 失败时只 return { ok: false } 而不抛异常。
+// 旧代码用 `try { await mount() } catch {}` 判断"桥就绪"，挂载失败时桥对象照样存在
+// → 状态卡片不再告警，而模型实际上一个 DSH 工具都调不到。
+
+const silentLogger = { info() {}, warn() {} }
+
+/** 只会拒绝 POST /mcp 的假内核 */
+function brokenKernel(message = 'POST /mcp 500') {
+  return { base: 'http://127.0.0.1:1', async request() { throw new Error(message) } }
+}
+
+/** 接受任意请求的假内核 */
+function healthyKernel() {
+  return {
+    base: 'http://127.0.0.1:2',
+    calls: [],
+    async request(method, path, body) {
+      this.calls.push({ method, path, body })
+      return { status: 200, text: '{}' }
+    },
+  }
+}
+
+test('bridge.mount: 成功时 mountedKernel 指向该内核', async () => {
+  const { createMcpBridge } = await import('../lib/mcp-bridge.js')
+  const bridge = await createMcpBridge({ logger: silentLogger })
+  try {
+    const kernel = healthyKernel()
+    assert.equal(bridge.mountedKernel(), null, '创建后还没挂载')
+    const result = await bridge.mount(kernel)
+    assert.equal(result.ok, true)
+    assert.equal(bridge.mountedKernel(), kernel)
+  } finally {
+    await bridge.close()
+  }
+})
+
+test('bridge.mount: 失败时返回 ok:false 且 mountedKernel 为 null（不抛异常）', async () => {
+  const { createMcpBridge } = await import('../lib/mcp-bridge.js')
+  const bridge = await createMcpBridge({ logger: silentLogger })
+  try {
+    // 不抛错是刻意的契约：transport 据此把本轮降级为纯文本
+    const result = await bridge.mount(brokenKernel())
+    assert.equal(result.ok, false)
+    assert.match(result.error, /POST \/mcp 500/)
+    assert.equal(bridge.mountedKernel(), null, '挂载失败不能声称已挂载')
+  } finally {
+    await bridge.close()
+  }
+})
+
+test('bridge.mount: 重挂失败后状态回到 null（旧挂载不再可信）', async () => {
+  const { createMcpBridge } = await import('../lib/mcp-bridge.js')
+  const bridge = await createMcpBridge({ logger: silentLogger })
+  try {
+    const good = healthyKernel()
+    assert.equal((await bridge.mount(good)).ok, true)
+    assert.equal(bridge.mountedKernel(), good)
+    const result = await bridge.mount(brokenKernel('socket hang up'), { force: true })
+    assert.equal(result.ok, false)
+    assert.equal(bridge.mountedKernel(), null, '重挂失败后不能继续声称已挂载')
+  } finally {
+    await bridge.close()
+  }
+})
+
+test('bridge.close: 关闭后 mountedKernel 归零（重启窗口不能误判为就绪）', async () => {
+  const { createMcpBridge } = await import('../lib/mcp-bridge.js')
+  const bridge = await createMcpBridge({ logger: silentLogger })
+  const kernel = healthyKernel()
+  await bridge.mount(kernel)
+  assert.equal(bridge.mountedKernel(), kernel)
+  await bridge.close()
+  assert.equal(bridge.mountedKernel(), null)
+})
+
+test('bridge.mount: 同一内核重复挂载走 alreadyMounted 快路径', async () => {
+  const { createMcpBridge } = await import('../lib/mcp-bridge.js')
+  const bridge = await createMcpBridge({ logger: silentLogger })
+  try {
+    const kernel = healthyKernel()
+    await bridge.mount(kernel)
+    const again = await bridge.mount(kernel)
+    assert.equal(again.ok, true)
+    assert.equal(again.alreadyMounted, true)
+    assert.equal(kernel.calls.length, 1, '第二次不应该再发 POST /mcp')
+  } finally {
+    await bridge.close()
+  }
+})
+
+// ------------------------------------------------------------ 告警判据（PR7-r3）
+
+test('isBridgeMounted: 只有挂到当前内核才算就绪（建好≠挂上）', async () => {
+  const { isBridgeMounted } = await import('../lib/index.js')
+  const kernelA = { base: 'a' }
+  const kernelB = { base: 'b' }
+  // 建好了但没挂上（mount 返回 ok:false 时正是这个状态）
+  assert.equal(isBridgeMounted({ mountedKernel: () => null }, kernelA), false)
+  // 挂在别的内核上（重启前后换了句柄）
+  assert.equal(isBridgeMounted({ mountedKernel: () => kernelB }, kernelA), false)
+  // 正常就绪
+  assert.equal(isBridgeMounted({ mountedKernel: () => kernelA }, kernelA), true)
+  // 空值/异常一律当"未就绪"，绝不能误报就绪（误报会抑制告警）
+  assert.equal(isBridgeMounted(null, kernelA), false)
+  assert.equal(isBridgeMounted({ mountedKernel: () => kernelA }, null), false)
+  assert.equal(isBridgeMounted({}, kernelA), false)
+  assert.equal(isBridgeMounted({ mountedKernel() { throw new Error('boom') } }, kernelA), false)
+})

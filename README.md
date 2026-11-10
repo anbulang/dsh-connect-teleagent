@@ -83,15 +83,58 @@ dsh plugin --profile web add github:anbulang/dsh-connect-teleagent
 ### 方式 C：Release 离线包
 
 从 [Releases](https://github.com/anbulang/dsh-connect-teleagent/releases/latest) 下载
-`dsh-connect-teleagent-<version>.tgz`，解压到 `~/.dsh/plugins/dsh-connect-teleagent/`，
-macOS 也可以用仓库里的安装脚本：
+`dsh-connect-teleagent-<version>.tgz`（包里只有插件本体，**不含** `scripts/`），解压到
+`~/.dsh/plugins/dsh-connect-teleagent/`；macOS 也可以用仓库里的安装脚本：
 
 ```bash
-bash scripts/install.sh      # 复制到 ~/.dsh/plugins 并写入 profile
-bash scripts/uninstall.sh    # 卸载
+mkdir -p ~/.dsh/plugins/dsh-connect-teleagent
+tar -xzf dsh-connect-teleagent-<version>.tgz --strip-components=1 \
+  -C ~/.dsh/plugins/dsh-connect-teleagent      # 去掉 tar 包顶层的 package/ 前缀
 ```
 
-安装后**完全退出并重启 DeepSeek Harness**；「设置 → 模型」里即可看到 TeleAgent 的 5 个模型。
+**但解压只是第一步**：DSH 不会自动发现这个目录，还要在 profile 里做**两处注册**
+（仓库里的 `scripts/install.sh` 做的正是这两件事 —— 从 git 检出运行时可以直接
+`bash scripts/install.sh`，它会连复制带注册一起做）。手工做的话，编辑
+`~/.dsh/profiles/desktop/package.json`（profile 名不是 `desktop` 时换成你的）：
+
+```jsonc
+{
+  "dependencies": {
+    "dsh-connect-teleagent": "file:/Users/<你>/.dsh/plugins/dsh-connect-teleagent"
+  },
+  "dsh": {
+    "profile": {
+      "bundles": [
+        // ……原有的 bundle 保持不动……
+        "dsh-connect-teleagent"          // ← 追加到列表末尾
+      ]
+    }
+  }
+}
+```
+
+1. **`dependencies`**：`file:` 指向插件目录的**绝对路径**（用 `~` 也可以，DSH 会展开）。
+2. **`dsh.profile.bundles`**：把包名追加进这个有序列表 —— 只有列表里的 bundle 才会被加载；
+   插件自带的 `cordis.patch.yml` 会经 bundle 机制自动生效，**不需要**再在 profile 的
+   `cordis.patch.yml` 里手写一条 `- id: dsh-connect-teleagent`。
+
+改完 `package.json` 后，在该 profile 目录里装一次依赖（Plugins 页在后台做的也是这件事）：
+
+```bash
+cd ~/.dsh/profiles/desktop && pnpm install
+```
+
+> `desktop` 是 DSH 保留给桌面端的 profile，`dsh plugin --profile desktop ...` 会被拒绝，
+> 所以这里直接用 pnpm。
+
+最后**完全退出并重启 DeepSeek Harness**；「设置 → 模型」里即可看到 TeleAgent 的 5 个模型。
+
+漏掉任一步的后果不一样，别只看"插件目录在不在"：
+
+| 漏掉 | 现象 |
+|---|---|
+| `dependencies` | 启动时 stderr 打印 `skipping profile bundle "dsh-connect-teleagent": … cannot resolve profile bundle …`，插件不加载（DSH 仍能启动，所以很容易被忽略） |
+| `dsh.profile.bundles` | 包装上了但从不激活 —— 模型列表里同样没有 TeleAgent |
 
 ### 上游 apiKey
 
@@ -109,7 +152,11 @@ bash scripts/uninstall.sh    # 卸载
 
 ## 使用
 
-- **模型开关**：设置卡片里取消勾选即从选择器移除，重启后保留
+配置入口有两个（同一个配置，两处都能改，改完下一轮请求生效）：
+- **设置 → TeleAgent**：DSH 原生设置页里的精简表单（停用开关 / 模型勾选 / 工具白名单 / 积分自动领取）
+- **设置 → 插件 → TeleAgent**：富卡片，除同样四项外还带账号、登录、积分余额、诊断等运维信息
+
+- **模型开关**：取消勾选即从选择器移除，重启后保留
 - **积分**：卡片显示余额与今日领取状态；可关自动领取
 - **添加账号（多账号）**：卡片「账号 → 本机账号 → 添加账号」→ 在 TeleAgent 里退出旧账号、
   用另一个账号登录。插件会**先备份**旧账号登录态，检测到新账号后**原样写回**，
@@ -185,21 +232,57 @@ DSH (pi-ai) ──OpenAI──► loopback shim (127.0.0.1:随机端口)
 
 ## 配置
 
-设置保存在 `$DSH_HOME/teleagent-plugin.json`（默认 `~/.dsh/teleagent-plugin.json`），
-并可通过 DSH 设置卡片编辑：
+配置分**两类**，存放位置不同，不要混在一起（写错地方不会报错，只是不生效）：
 
-```jsonc
-{
-  "transport": "kernel",          // kernel（默认）或 direct
-  "kernelAllowedTools": [],       // 允许内核额外执行的工具（默认空）
-  "denyBuiltinTools": true,       // 默认禁止内核自带工具，只走 DSH 的 MCP 工具
-  "kernelReadyTimeoutMs": 60000,
-  "enabledModelIds": [],          // 空数组 = 全部启用
-  "guard": { "maxConcurrent": 2, "failureThreshold": 3, "cooldownMs": 600000 }
-}
+| 类别 | 存放位置 | 由谁读写 | 包含字段 |
+|---|---|---|---|
+| **可配置设置** | **DSH 原生设置**（落到 profile 的 `cordis.patch.yml` 里本插件条目的 `config:`） | 宿主 settings 服务；「设置 → TeleAgent」表单与状态卡片都可写 | `providerDisabled`、`enabledModelIds`、`toolsAllowlist`、`autoClaimDaily` |
+| **运行时配置** | profile 的 `cordis.patch.yml` 里本插件条目的 `config:`（手写层） | 宿主在 `apply(ctx, config)` 时传入 | `transport`、`guard`、`kernelAllowedTools`、`denyBuiltinTools`、`kernelReadyTimeoutMs`、`toolBridge`、`baseUrl`/`timeoutMs`、`probeOnBoot`/`probeTimeoutMs`、`ui.allowChatProbe` |
+
+### 可配置设置（DSH 原生设置）
+
+自 0.13.0 起，这四项统一存进 **DSH 自己的设置文档**，而不再由插件自己维护一个 JSON 文件。
+好处是它们和其它插件设置放在一起，能在「设置」页里用原生表单改，改完**下一轮请求立即生效**（不需要重启）。
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `providerDisabled` | `false` | `true` = 整体停用，模型选择器里彻底消失 |
+| `enabledModelIds` | `[]` | 空数组 = 全部启用 |
+| `toolsAllowlist` | `[]` | `[]`/`null` = 全发；数组 = 只发匹配项（支持 `foo*`） |
+| `autoClaimDaily` | `true` | 积分每日自动领取 |
+
+**旧配置会自动迁移**：升级后首次启动时，若 settings 里还没有值，插件会把旧的
+`~/.dsh/teleagent-plugin.json` 里的这四项搬进 settings，并在旧文件里打一个
+`migratedToSettings: true` 标记。**旧文件不会被删除**（留着可回滚），但之后不再作为主存储写入 ——
+只有宿主没有 settings 服务时它才继续当兜底存储。
+
+> 优先级：**settings > 旧 JSON > 显式 config**。`toolsAllowlist` 尤其如此：
+> 卡片/表单能改它，所以用户保存的值必须真正生效。
+
+
+### 运行时配置（profile 的 `cordis.patch.yml`）
+
+**改传输方式、内核参数、防护阈值只能走这里** —— 插件只在 `apply()` 时从 `config` 读这些值，
+写进「设置」表单或旧 `teleagent-plugin.json` 都不会生效。编辑 `~/.dsh/profiles/desktop/cordis.patch.yml`：
+
+```yaml
+- id: dsh-connect-teleagent
+  name: dsh-connect-teleagent
+  config:
+    transport: kernel              # kernel（默认）或 direct
+    kernelAllowedTools: []         # 允许内核额外执行的工具（默认空）
+    denyBuiltinTools: true         # 默认禁止内核自带工具，只走 DSH 的 MCP 工具
+    kernelReadyTimeoutMs: 60000
+    toolBridge: true               # false = 完全不启用 DSH 工具桥
+    guard: { maxConcurrent: 2, failureThreshold: 3, cooldownMs: 600000 }
 ```
 
-环境变量：`TELEAGENT_KERNEL_PORT`（内核端口，默认 47823）、`TELEAGENT_API_KEY`（上游 apiKey）。
+改完需**重启 DeepSeek Harness**：上表这些 `config` 值只在 `apply()` 启动时读一次。
+（`toolsAllowlist`、`enabledModelIds`、`providerDisabled`、`autoClaimDaily` 是例外 ——
+它们来自上面那张表里的可配置设置，每轮请求热读取。）
+
+环境变量（不分来源，启动时读取）：`TELEAGENT_KERNEL_PORT`（内核端口，默认 47823）、
+`TELEAGENT_API_KEY`（上游 apiKey）。
 
 ## 积分
 
@@ -225,8 +308,9 @@ DSH (pi-ai) ──OpenAI──► loopback shim (127.0.0.1:随机端口)
 DSH 会把**所有插件**的工具都塞进每次请求（实测 255 个，schema 约 875 KB ≈ 22 万 tokens），
 而且每一步都会重发。
 
-**设置 → 插件 → TeleAgent → 模型** 里的「工具白名单」编辑框可以直接改（每行一个，
-支持 `foo*` 通配，保存后下一轮生效）；也可以写成配置文件 `~/.dsh/teleagent-plugin.json`：
+**设置 → TeleAgent** 里的「工具白名单」编辑框可以直接改（每行一个，
+支持 `foo*` 通配，保存后下一轮生效）；也可以直接写 DSH 设置文档
+（`~/.dsh/profiles/desktop/cordis.patch.yml` 里本插件条目的 `config.toolsAllowlist`）：
 
 ```jsonc
 {
@@ -254,7 +338,7 @@ DSH 会把**所有插件**的工具都塞进每次请求（实测 255 个，sche
 
 ```bash
 node lib/doctor.js          # 环境/登录态/签名/模型目录自检（--json 可机器读）
-npm test                    # 262 个单元测试（不启动真内核）
+npm test                    # 全部单元测试（不启动真内核）
 npm run verify              # 单测 + CLI + 状态路由 + shim 形态 + 路由 + 卡片渲染（6 套件）
 ```
 
