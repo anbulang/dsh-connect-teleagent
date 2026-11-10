@@ -210,6 +210,12 @@ v1.0.0  依赖 v0.8 完成（对外发布需多账号稳定）
    `Config $ contains a non-plain root`。改为自持久化到
    `$DSH_HOME/teleagent-plugin.json`，不依赖宿主 settings API 的版本形状
 
+> **⚠️ 0.13.0 已逆转第 3 条，但前提变了**：当时 `settings.update()` 在目标宿主上
+> **根本不存在**，自持久化是唯一可行解。现在 0.1.7+/0.2.x 线已有完整 settings 服务
+> （`describe` / `update` / `configure`），所以把四项设置搬回了 DSH 原生设置。
+> 写入前仍是 `typeof host.update === 'function'` 软探测，不存在就退回自持久化 ——
+> 原来那个「版本形状」的顾虑依然由代码守着，不是凭假设。详见 CHANGELOG 0.13.0。
+
 ### Host 侧验证结果
 
 ```

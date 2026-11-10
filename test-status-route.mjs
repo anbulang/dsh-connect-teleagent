@@ -283,6 +283,261 @@ ok('畸形 Origin 被拒', sameOriginRequest(fakeReqV({ origin: 'not a url' })) 
   ok('mutationGuard: 无 body 空 POST 放行', pass === true && res.out.status === null)
 }
 
+// ---------------------------------------------------------------- settings 优先 / via 标注
+//
+// 契约（.temp/settings-contract.md §5）：写路由的 setter 返回
+//   { ok: boolean, via: 'settings'|'store', value?, reason? }
+// 响应体新增 via，已有字段一个都不删。
+//
+// 这里**不重跑 apply()**（那会拉起第二个内核），而是直接用 registerStatusRoutes
+// 起一套独立路由，逐个注入不同形状的 deps —— 这正是「deps 契约」的边界。
+//
+// 覆盖四条：
+//   1. settings 可用 → via='settings'
+//   2. settings 不可用 → via='store'，且写入仍然成功（降级不失败）
+//   3. setter 返回裸 true（旧实现）→ 向后兼容，视为成功、via='store'
+//   4. setter 返回 { ok:false, reason } → 如实反映失败，不再"假成功"
+//   5. toolsAllowlist 的 []（settings）与 null（store）对外归一成同一个表示
+
+const statusMod = await import(pathToFileURL(path.join(ROOT, 'lib', 'status.js')).href)
+
+/** 用一组自定义 deps 起路由，返回 { base, close } */
+async function serveWithDeps(depsFactory) {
+  const map = new Map()
+  const ws = {
+    register({ path: p, handler }) { map.set(p, handler); return () => map.delete(p) },
+  }
+  const disposeRoutes = statusMod.registerStatusRoutes({ webServer: ws, deps: depsFactory, warn: () => {} })
+  const srv = http.createServer((req, res) => {
+    req.headers.host = `127.0.0.1:${srv.address().port}`
+    const h = map.get(String(req.url ?? '').split('?')[0])
+    if (!h) { res.writeHead(404); return res.end('no route') }
+    Promise.resolve(h(req, res)).catch(() => { res.writeHead(500); res.end('boom') })
+  })
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r))
+  const port = srv.address().port
+  return {
+    base: `http://127.0.0.1:${port}/plugins/dsh-connect-teleagent`,
+    origin: `http://127.0.0.1:${port}`,
+    async post(path, body) {
+      const r = await fetch(this.base + path, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: this.origin },
+        body: JSON.stringify(body),
+      })
+      return { status: r.status, json: await r.json().catch(() => null) }
+    },
+    async get(path) {
+      const r = await fetch(this.base + path, { headers: { origin: this.origin } })
+      return { status: r.status, json: await r.json().catch(() => null) }
+    },
+    close() { try { disposeRoutes?.() } catch { /* ignore */ } srv.close() },
+  }
+}
+
+// ---- 1) settings 可用：写读都标 via='settings'
+{
+  const state = { tools: null, disabled: false, ids: [], auto: true }
+  const s = await serveWithDeps(() => ({
+    settingsSource: () => 'settings',
+    upstream: { ready: true },
+    toolsAllowlist: () => state.tools,
+    setToolsAllowlist: (v) => {
+      state.tools = v
+      return { ok: true, via: 'settings', value: v }
+    },
+    provider: () => ({ disabled: state.disabled }),
+    setProviderDisabled: (d) => {
+      state.disabled = d
+      return { ok: true, via: 'settings', value: { disabled: d } }
+    },
+    enabledModelIds: () => ({ value: state.ids, via: 'settings' }),
+    saveEnabledModelIds: async (ids) => {
+      state.ids = ids
+      return { ok: true, via: 'settings', value: ids }
+    },
+    setAutoClaimDaily: (e) => {
+      state.auto = e
+      return { ok: true, via: 'settings' }
+    },
+    autoClaimDaily: () => ({ value: state.auto, via: 'settings' }),
+  }))
+
+  const t = await s.post('/tools', { toolsAllowlist: ['bash'] })
+  ok('settings 可用：tools 写 via=settings', t.status === 200 && t.json?.via === 'settings', JSON.stringify(t.json))
+  ok('settings 可用：tools 写仍返回原字段', Array.isArray(t.json?.toolsAllowlist) && t.json.toolsAllowlist[0] === 'bash', JSON.stringify(t.json?.toolsAllowlist))
+
+  const st = await s.get('/status')
+  ok('settings 可用：status 读 via=settings', st.status === 200 && st.json?.via === 'settings', String(st.json?.via))
+  ok('settings 可用：status 逐字段标注来源', st.json?.configSource?.toolsAllowlist === 'settings' && st.json?.configSource?.enabledModelIds === 'settings', JSON.stringify(st.json?.configSource))
+
+  const m = await s.post('/models', { providerDisabled: true })
+  ok('settings 可用：provider 开关 via=settings', m.status === 200 && m.json?.via === 'settings' && m.json?.provider?.disabled === true, JSON.stringify(m.json))
+
+  const e = await s.post('/models', { enabledModelIds: ['chat-pro'] })
+  ok('settings 可用：模型勾选 via=settings', e.status === 200 && e.json?.via === 'settings', JSON.stringify(e.json))
+
+  const w = await s.post('/welfare', { action: 'auto', enabled: false })
+  ok('settings 可用：自动领取开关 via=settings', w.status === 200 && w.json?.via === 'settings', JSON.stringify(w.json))
+
+  // toolsAllowlist 归一：settings 侧 `[]` 与 store 侧 `null` 必须对外同形
+  await s.post('/tools', { toolsAllowlist: [] })
+  const emptyArr = await s.get('/status')
+  ok('空数组归一为 null（全发）', emptyArr.json?.toolsAllowlist === null, JSON.stringify(emptyArr.json?.toolsAllowlist))
+  await s.post('/tools', { toolsAllowlist: null })
+  const nullVal = await s.get('/status')
+  ok('null 与空数组同形', nullVal.json?.toolsAllowlist === null, JSON.stringify(nullVal.json?.toolsAllowlist))
+
+  s.close()
+}
+
+// ---- 2) settings 不可用：降级到 store，写入仍成功且 via='store'
+{
+  const state = { tools: null, disabled: false, ids: [] }
+  const s = await serveWithDeps(() => ({
+    // 明确声明只有 store 一层
+    settingsSource: () => 'store',
+    upstream: { ready: true },
+    toolsAllowlist: () => state.tools,
+    setToolsAllowlist: (v) => {
+      state.tools = v
+      return { ok: true, via: 'store', value: v }
+    },
+    provider: () => ({ disabled: state.disabled }),
+    setProviderDisabled: (d) => {
+      state.disabled = d
+      return { ok: true, via: 'store' }
+    },
+    enabledModelIds: () => state.ids,
+    saveEnabledModelIds: async (ids) => {
+      state.ids = ids
+      return { ok: true, via: 'store' }
+    },
+    autoClaimDaily: () => false,
+  }))
+
+  const t = await s.post('/tools', { toolsAllowlist: ['read'] })
+  ok('settings 不可用：tools 写 via=store 且成功', t.status === 200 && t.json?.ok === true && t.json?.via === 'store', JSON.stringify(t.json))
+  ok('settings 不可用：白名单真的写进去了', JSON.stringify(state.tools) === '["read"]', JSON.stringify(state.tools))
+
+  const st = await s.get('/status')
+  ok('settings 不可用：status 读 via=store', st.status === 200 && st.json?.via === 'store', String(st.json?.via))
+  ok('settings 不可用：autoClaimDaily 来自 deps getter', st.json?.welfare?.autoClaimDaily === false, JSON.stringify(st.json?.welfare?.autoClaimDaily))
+
+  s.close()
+}
+
+// ---- 3) 向后兼容：setter 返回裸 true / undefined（旧实现）
+{
+  const state = { tools: null, disabled: false, ids: [] }
+  const s = await serveWithDeps(() => ({
+    upstream: { ready: true },
+    toolsAllowlist: () => state.tools,
+    // 旧实现：只返回裸 true
+    setToolsAllowlist: (v) => { state.tools = v; return true },
+    provider: () => ({ disabled: state.disabled }),
+    // 旧实现：写完不返回值（但确实写进去了）
+    setProviderDisabled: (d) => { state.disabled = d },
+    enabledModelIds: () => state.ids,
+    // 旧实现：async 且不返回值（但确实写进去了）
+    saveEnabledModelIds: async (ids) => { state.ids = ids },
+  }))
+
+  const t = await s.post('/tools', { toolsAllowlist: ['bash', 'read'] })
+  ok('裸 true 视为成功且 via=store', t.status === 200 && t.json?.ok === true && t.json?.via === 'store', JSON.stringify(t.json))
+
+  const p = await s.post('/models', { providerDisabled: true })
+  ok('undefined 返回值：回读确认写入成功', p.status === 200 && p.json?.ok === true && p.json?.provider?.disabled === true, JSON.stringify(p.json))
+
+  const e = await s.post('/models', { enabledModelIds: ['chat-pro', 'chat-flash'] })
+  ok('async setter 不返回值：回读确认成功', e.status === 200 && e.json?.ok === true, JSON.stringify(e.json))
+
+  // 旧 deps 没有任何来源声明 → 只有 store 一层
+  const st = await s.get('/status')
+  ok('无来源声明时 via 回落到 store', st.json?.via === 'store', String(st.json?.via))
+
+  s.close()
+}
+
+// ---- 3b) 旧 setter 静默没写进去：回读校验必须判失败（不能假成功）
+{
+  const s = await serveWithDeps(() => ({
+    upstream: { ready: true },
+    toolsAllowlist: () => null,      // getter 永远读到 null
+    setToolsAllowlist: (v) => {},    // 旧实现：不返回值，且实际没写
+    provider: () => ({ disabled: false }),
+    setProviderDisabled: () => {},   // 同样没写
+    enabledModelIds: [],
+  }))
+
+  const t = await s.post('/tools', { toolsAllowlist: ['bash'] })
+  ok('静默未写入：回读判失败', t.status === 503 && t.json?.ok === false, `HTTP ${t.status} ${JSON.stringify(t.json)}`)
+  ok('静默未写入：reason 可读', t.json?.reason === 'write-unconfirmed', String(t.json?.reason))
+
+  const p = await s.post('/models', { providerDisabled: true })
+  ok('provider 静默未写入：回读判失败', p.status === 503 && p.json?.ok === false, `HTTP ${p.status}`)
+
+  s.close()
+}
+
+// ---- 4) setter 明确失败：必须如实反映，不能假成功
+{
+  const s = await serveWithDeps(() => ({
+    settingsSource: () => 'settings',
+    upstream: { ready: true },
+    toolsAllowlist: () => null,
+    // settings 服务声明可用，但写入被拒
+    setToolsAllowlist: () => ({ ok: false, via: 'settings', reason: 'settings-unavailable' }),
+    provider: () => ({ disabled: false }),
+    setProviderDisabled: () => ({ ok: false, via: 'settings', reason: 'settings-unavailable' }),
+    enabledModelIds: [],
+    saveEnabledModelIds: async () => ({ ok: false, via: 'settings', reason: 'settings-unavailable' }),
+  }))
+
+  const t = await s.post('/tools', { toolsAllowlist: ['bash'] })
+  ok('写失败：返回非 2xx', t.status === 503, `HTTP ${t.status}`)
+  ok('写失败：ok=false 且 reason 透出', t.json?.ok === false && t.json?.reason === 'settings-unavailable', JSON.stringify(t.json))
+  ok('写失败：仍带 via 供前端区分', t.json?.via === 'settings', String(t.json?.via))
+
+  const p = await s.post('/models', { providerDisabled: true })
+  ok('写失败：provider 开关同样如实反映', p.status === 503 && p.json?.ok === false, JSON.stringify(p.json))
+
+  const e = await s.post('/models', { enabledModelIds: ['chat-pro'] })
+  ok('写失败：模型勾选同样如实反映', e.status === 503 && e.json?.ok === false, JSON.stringify(e.json))
+
+  s.close()
+}
+
+// ---- 5) 纯函数契约（不起 HTTP，直接测归一化边界）
+{
+  ok('normalizeToolsAllowlist: [] → null', statusMod.normalizeToolsAllowlist([]) === null)
+  ok('normalizeToolsAllowlist: null → null', statusMod.normalizeToolsAllowlist(null) === null)
+  ok('normalizeToolsAllowlist: 去空/trim', JSON.stringify(statusMod.normalizeToolsAllowlist([' a ', '', 1, 'b'])) === '["a","b"]', JSON.stringify(statusMod.normalizeToolsAllowlist([' a ', '', 1, 'b'])))
+
+  ok('normalizeSetterResult: 裸 true → ok+store', statusMod.normalizeSetterResult(true).ok === true && statusMod.normalizeSetterResult(true).via === 'store')
+  ok('normalizeSetterResult: false → 失败', statusMod.normalizeSetterResult(false).ok === false)
+  ok('normalizeSetterResult: 信封保留 via/reason', (() => {
+    const r = statusMod.normalizeSetterResult({ ok: false, via: 'settings', reason: 'nope' })
+    return r.ok === false && r.via === 'settings' && r.reason === 'nope'
+  })())
+
+  // via 判定顺序：settingsSource > settingsAvailable > settingsNamespace > store
+  ok('settingsViaOf: settingsSource 优先', statusMod.settingsViaOf({ settingsSource: () => 'settings', settingsAvailable: () => false }) === 'settings')
+  ok('settingsViaOf: settingsAvailable 兜底', statusMod.settingsViaOf({ settingsAvailable: () => true }) === 'settings')
+  ok('settingsViaOf: namespace 弱信号', statusMod.settingsViaOf({ settingsNamespace: () => 'dsh-connect-teleagent' }) === 'settings')
+  ok('settingsViaOf: namespace 为 null 不算 settings', statusMod.settingsViaOf({ settingsNamespace: () => null }) === 'store')
+  ok('settingsViaOf: 都没声明 → store', statusMod.settingsViaOf({}) === 'store')
+  ok('settingsViaOf: 抛错不崩、回落 store', statusMod.settingsViaOf({ settingsSource: () => { throw new Error('x') } }) === 'store')
+
+  // getter 三种形状都接受
+  const env = statusMod.settleSetting({ value: ['x'], via: 'settings' })
+  ok('settleSetting: 信封取 value/via', JSON.stringify(env.value) === '["x"]' && env.via === 'settings')
+  const fn = statusMod.settleSetting(() => ['y'], 'store')
+  ok('settleSetting: 函数惰性求值', JSON.stringify(fn.value) === '["y"]' && fn.via === 'store')
+  const bare = statusMod.settleSetting(null, 'settings')
+  ok('settleSetting: 裸值 + 显式 via', bare.value === null && bare.via === 'settings')
+}
+
 console.log('\n状态路由反馈回路')
 console.log('─'.repeat(56))
 for (const x of report) console.log(`  ${x.c ? '✓' : '✗'} ${x.n.padEnd(28)} ${x.d}`)

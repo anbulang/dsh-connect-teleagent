@@ -6,6 +6,116 @@
 
 ---
 
+## 0.13.0 — 2026-11-09
+
+### feature：设置统一到 DSH 原生设置（对齐 `dsh-connect-workbuddy@5.21.2`）
+
+**动机**：插件此前自己维护 `~/.dsh/teleagent-plugin.json`，`lib/store.js` 的注释写着
+「不用宿主的 `ctx.settings`，因为它的写入是两段式、形状还在变」。代价是这四项设置
+其它插件都躺在 DSH 设置里，只有它们在一个没人知道位置的 JSON 文件里：
+用户在「设置」页里找不到，也没法用原生表单改。
+
+参考 `dsh-connect-workbuddy@5.21.2` 的做法（它 5.19.0 起把配置入口整体搬到
+`settings.section`），把这件事改成宿主原生的：
+
+**Host 侧（`lib/index.js`）**
+- 新增 `export const Config = z.object({...})`（schemastery），声明四个可配置字段；
+  每个字段 `.volatile()`，宿主据此允许「保存后不重启、下一轮请求立即生效」。
+- `ctx.inject(['settings'], sctx => ctx.effect(() => sctx.settings.configure({ auto: true }, ctx.fiber)))`
+  注册原生自动表单。
+- `settingsNamespaceOf(ctx)` 用 **Loader 条目 id**（宿主按精确匹配查表），
+  而不是插件自己声明的常量 —— 用错名字会得到 `No configurable plugin entry`，
+  表单与写入双双静默失效。
+- 读值统一走 `current()`（每轮重读，`settings > store > config`），
+  写值统一走 `settings.update(ns, patch)`，写不进去才退回 store。
+- `inject` 仍是 `['llm']`：**故意**不把 `settings` 写进依赖 —— cordis 的 inject 是
+  必需服务，缺一个就把 fiber 卡在 inactive，那会把「设置读不到」升级成「模型全不可用」。
+  `settings.configure` 走 `ctx.inject` 回调，服务就绪后补上。
+
+**schemastery 不可解析时不丢表单**
+本机插件目录没有 `node_modules`，且插件在 profile 里是符号链接（Node 解析 realpath），
+`import('@deepseek-ai/schemastery')` 直接 `ERR_MODULE_NOT_FOUND`。因此加了：
+- `loadSchemastery()`：先试本地，再试 profile 目录锚点，全失败退内置 shim，**永不抛错**；
+- `createBuiltinSchemastery()`：与真 schemastery `toJSON()` **同构**的最小替身
+  （`{uid, refs}` + refs 间接引用 + `meta.volatile`）。
+- ⚠️ 关键细节：宿主 `dsh-settings` 的 `volatileForm()` 读的是**活对象**的
+  `schema.dict`，不是 `toJSON()`。替身早期只暴露内部 `shape`，导致
+  `Object.entries(schema.dict ?? {})` 得到空表 → 判成「没有 volatile 字段」→
+  原生表单**静默不渲染**（不报错、不留占位）。现已同时暴露 `.dict`，并加了回归断言。
+
+**Store 侧（`lib/store.js`）**
+- 降级为「settings 的兜底层 + 旧数据迁移源」；原有 6 个导出形状完全不变。
+- 新增 `readLegacyStore` / `migrateLegacyToSettings` / `markLegacyMigrated` / `isLegacyMigrated`。
+- 迁移**幂等且保守**：只有 settings 明确为空（`isSettingsEmpty === true`）才写；
+  `false`/`undefined`/抛错一律不动 —— 返回 `true` 是唯一会触发写入的答案。
+- **旧文件保留**：迁移后在旧 JSON 里打 `migratedToSettings` + `migratedAt`，
+  不删文件、不清字段（可回滚）。用户明确要求「自动迁移并保留旧文件」。
+
+**Status 侧（`lib/status.js`）**
+- 四条读写路径全部走 deps 的 settings 优先 getter，文件内**零** `readStore()` 调用。
+- 三个写路由的响应新增 `via: 'settings' | 'store'`，`/status` 另加逐字段 `configSource`。
+- `undefined` 不判失败：旧 setter 全返回 `undefined`，判失败会让旧宿主上所有保存从
+  「成功」变「写入失败」（硬回归）。改用**回读校验** —— 回读生效值比对目标值，
+  生效→200、未生效→503 `write-unconfirmed`。
+
+**Client 侧（`lib/client.js`，+845/−79）**
+- 新增 `settings.section` + `settings.section.icon`（同一个插件自有 id，order 35）；
+  **删除** `plugins.bundle.config` / `plugins.row.config` keyed 槽位
+  （workbuddy 5.19.0 的做法：同一配置不该有两个编辑入口；且 keyed 槽位按
+  `pkg.name` 精确门控，换个 Loader entry id 就静默不渲染）。
+- 保留 `settings.plugins.tab` 富卡片做运维视图（账号/登录/诊断/福利）。
+- 四项写入统一收敛到 `writeSettingsField`：先 `settingsScope.set()` 并**回读校验**，
+  失败才回退到原 HTTP 路由（老宿主仍可用）。`configForms` 走 `softGet`，
+  不进 `exports.inject`（否则老宿主永远卡在等待依赖）。
+- 顺带修掉一个自己写出来的回归：胶囊的 disposer 被**调用**而不是**登记**，
+  首次绑定就把它自己释放了。
+
+**新增测试**
+- `test/settings.test.js`（33 条）：schema 字段/默认值/volatile、namespace 两种分支、
+  `asVolatile`/`unwrapVolatile` 语义、**shim 的 `.dict` 回归**、无 settings 优雅退化。
+- `test/store-migrate.test.js`（34 条）：迁移七种情形 + 幂等 + 旧文件不被破坏。
+- `test-settings-host.mjs`（37 条，`npm run test:settings`）：用**可用的** settings 服务
+  真跑 `apply()`，覆盖 7 个场景 —— 全新安装 / settings 优先 / tools 与 models 写 settings /
+  旧配置迁移 / 迁移幂等 / 写入失败降级。与 `test-status-route.mjs`（不可用那支）互补。
+
+`npm test` 322 → **389** 条，`npm run verify` 全绿。
+
+### 修复：fiber 重挂后 460ms 重试撞上 `no adapter registered for provider "teleagent"`
+
+**现象**：插件跑一段时间后，界面出现 `重试延迟：460毫秒 / 失败原因：terminated /
+本轮运行失败 no adapter registered for provider "teleagent"`。
+
+**根因（宿主 asar + `~/.dsh/teleagent-boot.log` 实测）**：三个症状是同一个事件的三段。
+宿主 `ctx.llm.registerAdapter()` 用 `ctx.effect` 把路由绑到**当前 fiber**；HMR /
+`cordis.patch.yml` / profile manifest 写入 / 配置重算触发 fiber 重挂时：
+1. 旧 fiber 卸载 → effect disposer 从 `LlmRuntime.adapters` 删掉 `teleagent`，
+   同时 `apply()` 返回的 disposer 执行 `cleanup()` 杀内核、关 shim → 在途 SSE 被掐断；
+2. `dsh-llm-pi-ai` 把 undici 的 `terminated` 归为 `TRANSPORT`（默认可重试），
+   `dsh-llm-retry` 按 `500ms × [0.9,1.1]` 首次退避 → 用户看到的 **460ms**；
+3. 新 fiber 的 `apply()` 虽已同步返回，但真正的 `PiAiAdapter` 在**未 await 的
+   `boot()` 末尾**才 `registerAdapter`（依赖动态 import + kernel 就绪 + shim 端口）。
+   bootlog 实测 `apply 进入 → provider 已注册` = **2694 / 3205 / 3644 ms**，
+   460ms 的重试必然落在这个窗口里 → `adapters.get('teleagent')` 为空 →
+   `NO_ADAPTER`（且不在默认 retryableCodes 里，直接整轮失败）。
+
+**修法**：`apply()` **同步**注册一个 `createForwardingAdapter()` 门面（宿主缓存的
+引用恒定），`boot()` 完成后 `setInner()` 把 `PiAiAdapter` 热替换进去；不再二次
+`registerAdapter`（会抛 `DUPLICATE_ADAPTER` 并重新制造注销窗口）。门面未就绪时：
+- 元数据方法给合理兜底（模型选择器不报错）；
+- 真正要发流时抛带 `code: 'TRANSPORT'` 的可重试错误，重试排队等 boot 完成，
+  而不是伪装成不可重试的 `NO_ADAPTER` 把整轮判死。
+
+顺带修掉一个相关泄漏：fiber 若在异步 boot 中途被卸载，`cleanup()` 早于
+`createShim()` / `startKernel()` 执行，后半段才建好的 shim HTTP server / 内核
+会成为永不释放的孤儿。现在每个 `stopped` 早退点与 `boot()` 末尾都调
+`cleanupLateBootResources()` 补关。
+
+**回归**：`test/adapter-window.test.js`（6 条）—— 同步注册契约、460ms 重载窗口、
+门面转发/未就绪/启动失败三条契约。复现回路（隔离 HOME、~1.8s）修前 RED、
+修后 GREEN。`npm run verify` 全绿。
+
+---
+
 ## 0.12.4 — 2026-11-07
 
 ### 修复：空 Cookie 库被当成错误，sqlite3 的报错直接漏进终端

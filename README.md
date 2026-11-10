@@ -144,7 +144,11 @@ cd ~/.dsh/profiles/desktop && pnpm install
 
 ## 使用
 
-- **模型开关**：设置卡片里取消勾选即从选择器移除，重启后保留
+配置入口有两个（同一个配置，两处都能改，改完下一轮请求生效）：
+- **设置 → TeleAgent**：DSH 原生设置页里的精简表单（停用开关 / 模型勾选 / 工具白名单 / 积分自动领取）
+- **设置 → 插件 → TeleAgent**：富卡片，除同样四项外还带账号、登录、积分余额、诊断等运维信息
+
+- **模型开关**：取消勾选即从选择器移除，重启后保留
 - **积分**：卡片显示余额与今日领取状态；可关自动领取
 - **添加账号（多账号）**：卡片「账号 → 本机账号 → 添加账号」→ 在 TeleAgent 里退出旧账号、
   用另一个账号登录。插件会**先备份**旧账号登录态，检测到新账号后**原样写回**，
@@ -224,30 +228,34 @@ DSH (pi-ai) ──OpenAI──► loopback shim (127.0.0.1:随机端口)
 
 | 类别 | 存放位置 | 由谁读写 | 包含字段 |
 |---|---|---|---|
-| **持久化设置** | `$DSH_HOME/teleagent-plugin.json`（默认 `~/.dsh/teleagent-plugin.json`） | 插件自己；设置卡片可写 | `enabledModelIds`、`providerDisabled`、`toolsAllowlist`、`welfare` |
-| **运行时配置** | profile 的 `cordis.patch.yml` 里本插件条目的 `config:` | 宿主在 `apply(ctx, config)` 时传入 | `transport`、`guard`、`kernelAllowedTools`、`denyBuiltinTools`、`kernelReadyTimeoutMs`、`toolBridge`、`baseUrl`/`timeoutMs`、`probeOnBoot`/`probeTimeoutMs`、`ui.allowChatProbe`、`welfare.*` |
+| **可配置设置** | **DSH 原生设置**（落到 profile 的 `cordis.patch.yml` 里本插件条目的 `config:`） | 宿主 settings 服务；「设置 → TeleAgent」表单与状态卡片都可写 | `providerDisabled`、`enabledModelIds`、`toolsAllowlist`、`autoClaimDaily` |
+| **运行时配置** | profile 的 `cordis.patch.yml` 里本插件条目的 `config:`（手写层） | 宿主在 `apply(ctx, config)` 时传入 | `transport`、`guard`、`kernelAllowedTools`、`denyBuiltinTools`、`kernelReadyTimeoutMs`、`toolBridge`、`baseUrl`/`timeoutMs`、`probeOnBoot`/`probeTimeoutMs`、`ui.allowChatProbe` |
 
-### 持久化设置（`~/.dsh/teleagent-plugin.json`）
+### 可配置设置（DSH 原生设置）
 
-正常不需要手改 —— 「设置 → 插件 → TeleAgent」卡片会写它。手工编辑时注意**只放这几个字段**，
-文件里出现运行时字段（如 `transport`）会被忽略：
+自 0.13.0 起，这四项统一存进 **DSH 自己的设置文档**，而不再由插件自己维护一个 JSON 文件。
+好处是它们和其它插件设置放在一起，能在「设置」页里用原生表单改，改完**下一轮请求立即生效**（不需要重启）。
 
-```jsonc
-{
-  "enabledModelIds": ["chat-pro", "chat-flash"],  // 空数组 = 全部启用
-  "providerDisabled": false,                      // true = 整体停用（模型选择器里消失）
-  "toolsAllowlist": null,                         // null/[] = 全发；数组 = 只发匹配项
-  "welfare": { "autoClaimDaily": true }           // 积分自动领取
-}
-```
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `providerDisabled` | `false` | `true` = 整体停用，模型选择器里彻底消失 |
+| `enabledModelIds` | `[]` | 空数组 = 全部启用 |
+| `toolsAllowlist` | `[]` | `[]`/`null` = 全发；数组 = 只发匹配项（支持 `foo*`） |
+| `autoClaimDaily` | `true` | 积分每日自动领取 |
 
-> 优先级补充：`enabledModelIds` 是 **config > store**（宿主显式配置压过卡片勾选）；
-> `toolsAllowlist` 是 **store > config**（卡片能改它，所以用户保存的值必须真正生效）。
+**旧配置会自动迁移**：升级后首次启动时，若 settings 里还没有值，插件会把旧的
+`~/.dsh/teleagent-plugin.json` 里的这四项搬进 settings，并在旧文件里打一个
+`migratedToSettings: true` 标记。**旧文件不会被删除**（留着可回滚），但之后不再作为主存储写入 ——
+只有宿主没有 settings 服务时它才继续当兜底存储。
+
+> 优先级：**settings > 旧 JSON > 显式 config**。`toolsAllowlist` 尤其如此：
+> 卡片/表单能改它，所以用户保存的值必须真正生效。
+
 
 ### 运行时配置（profile 的 `cordis.patch.yml`）
 
 **改传输方式、内核参数、防护阈值只能走这里** —— 插件只在 `apply()` 时从 `config` 读这些值，
-写进 `teleagent-plugin.json` 不会生效。编辑 `~/.dsh/profiles/desktop/cordis.patch.yml`：
+写进「设置」表单或旧 `teleagent-plugin.json` 都不会生效。编辑 `~/.dsh/profiles/desktop/cordis.patch.yml`：
 
 ```yaml
 - id: dsh-connect-teleagent
@@ -262,8 +270,8 @@ DSH (pi-ai) ──OpenAI──► loopback shim (127.0.0.1:随机端口)
 ```
 
 改完需**重启 DeepSeek Harness**：上表这些 `config` 值只在 `apply()` 启动时读一次。
-（`toolsAllowlist`、`enabledModelIds`、`providerDisabled`、`welfare.autoClaimDaily` 是例外 ——
-它们来自上面那张表里的持久化设置，每轮请求热读取。）
+（`toolsAllowlist`、`enabledModelIds`、`providerDisabled`、`autoClaimDaily` 是例外 ——
+它们来自上面那张表里的可配置设置，每轮请求热读取。）
 
 环境变量（不分来源，启动时读取）：`TELEAGENT_KERNEL_PORT`（内核端口，默认 47823）、
 `TELEAGENT_API_KEY`（上游 apiKey）。
@@ -292,8 +300,9 @@ DSH (pi-ai) ──OpenAI──► loopback shim (127.0.0.1:随机端口)
 DSH 会把**所有插件**的工具都塞进每次请求（实测 255 个，schema 约 875 KB ≈ 22 万 tokens），
 而且每一步都会重发。
 
-**设置 → 插件 → TeleAgent → 模型** 里的「工具白名单」编辑框可以直接改（每行一个，
-支持 `foo*` 通配，保存后下一轮生效）；也可以写成配置文件 `~/.dsh/teleagent-plugin.json`：
+**设置 → TeleAgent** 里的「工具白名单」编辑框可以直接改（每行一个，
+支持 `foo*` 通配，保存后下一轮生效）；也可以直接写 DSH 设置文档
+（`~/.dsh/profiles/desktop/cordis.patch.yml` 里本插件条目的 `config.toolsAllowlist`）：
 
 ```jsonc
 {
