@@ -2,7 +2,7 @@
   <a href="https://github.com/anbulang/dsh-connect-teleagent/releases/latest"><img alt="release" src="https://img.shields.io/github/v/release/anbulang/dsh-connect-teleagent?label=release&color=2ea44f"></a>
   <a href="https://github.com/anbulang/dsh-connect-teleagent/blob/main/package.json"><img alt="version" src="https://img.shields.io/badge/version-0.12.0-blue"></a>
   <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-purple"></a>
-  <a href="https://github.com/anbulang/dsh-connect-teleagent"><img alt="platform" src="https://img.shields.io/badge/platform-macOS-lightgrey"></a>
+  <a href="https://github.com/anbulang/dsh-connect-teleagent"><img alt="platform" src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey"></a>
   <a href="https://github.com/anbulang/dsh-connect-teleagent"><img alt="dsh" src="https://img.shields.io/badge/DSH-0.2.1--rc.1%2B-orange"></a>
   <a href="https://github.com/anbulang/dsh-connect-teleagent"><img alt="index" src="https://img.shields.io/badge/index-format--1-blueviolet"></a>
   <a href="https://github.com/anbulang/dsh-connect-teleagent"><img alt="tests" src="https://img.shields.io/badge/tests-262%20passing-brightgreen"></a>
@@ -49,9 +49,17 @@ history, tool calls and streaming stay under DSH's control.
 
 ## Requirements
 
-1. macOS with the TeleAgent desktop app installed and **logged in** (`/Applications/TeleAgent.app`)
+1. **TeleAgent 2.7.1 or later** on macOS or Windows. Launch the app at least once and sign in.
 2. DeepSeek Harness **0.2.1-rc.1+** (so the plugin index / Discover tab is available)
 3. The upstream gateway apiKey configured locally (see below)
+
+`dsh-connect-teleagent doctor --json` and the plugin diagnostics show the installed version. Model access requires a readable, supported version.
+
+On Windows, run DSH as the same Windows user who signed in to TeleAgent. For a custom installation, set
+`$env:TELEAGENT_APP_PATH = 'D:\Apps\TeleAgent\TeleAgent.exe'` before launching DSH.
+The standalone CLI requires Node.js 22.19+ (22.x) or 24+.
+
+On Windows, TeleAgent locks its points cookie database while running. After signing in, open the points page once and fully quit TeleAgent so the plugin can read it.
 
 ## Install
 
@@ -76,7 +84,8 @@ dsh plugin --profile web add github:anbulang/dsh-connect-teleagent
 
 Download `dsh-connect-teleagent-<version>.tgz` from
 [Releases](https://github.com/anbulang/dsh-connect-teleagent/releases/latest) (the archive holds
-the plugin only — it does **not** ship `scripts/`) and unpack it into the plugin directory:
+the plugin only — it does **not** ship `scripts/`) and unpack it into
+`~/.dsh/plugins/dsh-connect-teleagent/`. On macOS you can also use the bundled scripts:
 
 ```bash
 mkdir -p ~/.dsh/plugins/dsh-connect-teleagent
@@ -336,7 +345,6 @@ npm run verify              # unit + CLI + status routes + shim shape + routes +
 
 ## Known limitations
 
-- **macOS only** — the TeleAgent desktop app is macOS-only
 - **Image input** — only `chat-pro` / `chat-flash`; `chat-lite` hallucinates, `chat-nano` / `chat-flagship` reject
 - **Protocol is reverse-engineered** — upstream/kernel updates may need adaptation (`doctor` surfaces signature drift)
 - **Model behavior** — some models write progress narration into the answer body (not a rendering bug)

@@ -62,7 +62,7 @@
     "dsh-connect-teleagent": "./lib/bin.js"
   },
   "scripts": {
-    "test": "node --test test/unit.test.js test/credential.test.js test/store.test.js test/store-migrate.test.js test/settings.test.js test/lifecycle.test.js test/health.test.js test/guard.test.js test/account.test.js test/welfare.test.js test/metadata.test.js test/accounts.test.js test/add-account.test.js test/kernel.test.js test/loader.test.js test/adapter-window.test.js test/attachments.test.js test/image-budget.test.js test/shim-heartbeat.test.js test/tools-filter.test.js test/doctor.test.js",
+    "test": "node --test test/unit.test.js test/credential.test.js test/desktop.test.js test/store.test.js test/store-migrate.test.js test/settings.test.js test/lifecycle.test.js test/health.test.js test/guard.test.js test/account.test.js test/welfare.test.js test/metadata.test.js test/accounts.test.js test/add-account.test.js test/kernel.test.js test/loader.test.js test/adapter-window.test.js test/attachments.test.js test/image-budget.test.js test/shim-heartbeat.test.js test/tools-filter.test.js test/doctor.test.js",
     "doctor": "node lib/doctor.js",
     "test:routes": "node test-routes.mjs",
     "test:e2e": "node test-e2e.mjs",
