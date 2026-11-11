@@ -23,7 +23,7 @@ import http from 'node:http'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const SRC = path.join(path.dirname(fileURLToPath(import.meta.url)), 'lib')
-const ROOT = path.join(os.tmpdir(), 'te-settings-harness')
+const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'te-settings-harness-'))
 
 // ---------------------------------------------------------------- 隔离 HOME
 //
@@ -31,6 +31,9 @@ const ROOT = path.join(os.tmpdir(), 'te-settings-harness')
 // 把用户正在用的内核当成遗留进程杀掉。必须在 import 之前设置。
 const ISOLATED_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'te-settings-home-'))
 process.env.HOME = ISOLATED_HOME
+process.env.USERPROFILE = ISOLATED_HOME
+delete process.env.TELEAI_TA_DEVICE_DATA_DIR
+delete process.env.TELEAGENT_CONFIG_DIR
 process.env.DSH_HOME = path.join(ISOLATED_HOME, '.dsh')
 
 // ---------------------------------------------------------------- 准备桩依赖
@@ -40,6 +43,26 @@ fs.writeFileSync(path.join(ROOT, 'package.json'), JSON.stringify({ name: 'te-har
 for (const f of fs.readdirSync(SRC)) {
   if (f.endsWith('.js')) fs.copyFileSync(path.join(SRC, f), path.join(ROOT, 'lib', f))
 }
+
+// Keep the real scheduler; replace only the external portal boundary and capture
+// the instance so the integration checks can run ticks without real credentials.
+fs.renameSync(path.join(ROOT, 'lib', 'welfare.js'), path.join(ROOT, 'lib', 'welfare-real.js'))
+fs.writeFileSync(path.join(ROOT, 'lib', 'welfare.js'), `
+export * from './welfare-real.js'
+import { createWelfare as realCreate } from './welfare-real.js'
+export let instance
+export let claimCalls = 0
+export function createWelfare(options, overrides) {
+  claimCalls = 0
+  const portal = {
+    fetchPoints: async () => ({ ok: true, balance: 100, expiresAt: null }),
+    fetchDailyStatus: async () => ({ ok: true, claimedToday: false, claimable: 10, totalDays: 0, totalPoints: 0 }),
+    claimDaily: async () => { claimCalls++; return { ok: true, claimed: true, points: 10 } },
+  }
+  instance = realCreate({ ...options, getAuth: async () => ({ userId: 'test' }), portal }, overrides)
+  return instance
+}
+`)
 
 const stub = (name, body) => {
   const dir = path.join(ROOT, 'node_modules', name)
@@ -77,7 +100,9 @@ function createSettingsService({ initial = undefined, failUpdate = false } = {})
       return row === undefined ? undefined : { ...row }
     },
     async update(ns, patch) {
-      if (state.failUpdate) throw new Error('update refused')
+      if (state.failUpdate === true) throw new Error('update refused')
+      if (state.failUpdate === 'false') return false
+      if (state.failUpdate === 'noop') return true
       state.updates.push({ ns, patch })
       const prev = state.sections.get(ns) ?? {}
       state.sections.set(ns, { ...prev, ...patch })
@@ -132,7 +157,7 @@ async function callRoute(route, { method = 'GET', body = undefined, headers = {}
  * 每次 apply 都用一个全新的 settings 服务实例 —— apply 里的 configure 是
  * 「每个插件实例一次」，复用同一个实例会抛 already configured。
  */
-async function boot({ legacy = undefined, settingsInitial = undefined, failUpdate = false } = {}) {
+async function boot({ legacy = undefined, settingsInitial = undefined, failUpdate = false, hasSettings = true, config = {}, normalizeConfig = false } = {}) {
   // 旧 JSON：由调用方决定是否预置（迁移场景）
   const storeDir = path.join(ISOLATED_HOME, '.dsh')
   fs.mkdirSync(storeDir, { recursive: true })
@@ -144,9 +169,9 @@ async function boot({ legacy = undefined, settingsInitial = undefined, failUpdat
   const ctx = {
     logger,
     // 关键区别：这里 **能** 拿到 settings 服务
-    get: (name) => (name === 'settings' ? settings : undefined),
+    get: (name) => (name === 'settings' && hasSettings ? settings : undefined),
     inject(deps, cb) {
-      const child = { ...ctx, webServer, settings, effect: (fn) => { const d = fn(); return () => d?.() } }
+      const child = { ...ctx, webServer, settings: hasSettings ? settings : undefined, effect: (fn) => { const d = fn(); return () => d?.() } }
       cb(child)
       return () => {}
     },
@@ -159,11 +184,13 @@ async function boot({ legacy = undefined, settingsInitial = undefined, failUpdat
 
   const mod = await import(pathToFileURL(path.join(ROOT, 'lib', 'index.js')).href)
   routes.length = 0
-  const dispose = mod.apply(ctx, { probeTimeoutMs: 1 })
+  const appliedConfig = normalizeConfig ? (await mod.Config['~standard'].validate(config)).value : config
+  const dispose = mod.apply(ctx, { probeTimeoutMs: 1, transport: 'direct', ...appliedConfig })
   // 等异步装配（迁移是 void 的）落定
   await new Promise((r) => setTimeout(r, 800))
   const find = (suffix) => routes.find((r) => String(r.path ?? '').endsWith(suffix))
-  return { mod, settings, dispose, find, storeFile }
+  const welfare = await import(pathToFileURL(path.join(ROOT, 'lib', 'welfare.js')).href)
+  return { mod, settings, dispose, find, storeFile, welfare }
 }
 
 const results = []
@@ -301,6 +328,102 @@ const results = []
   results.push('场景7 写入失败降级')
 }
 
+// Regression: a readable authoritative setting must not hide a failed write.
+for (const failUpdate of [true, 'false', 'noop']) {
+  const initial = { providerDisabled: false, enabledModelIds: ['chat-pro'], toolsAllowlist: ['read'], autoClaimDaily: true }
+  const { settings, dispose, find, storeFile } = await boot({ settingsInitial: initial, failUpdate })
+  for (const [suffix, body] of [
+    ['/tools', { toolsAllowlist: ['bash'] }],
+    ['/models', { providerDisabled: true }],
+    ['/models', { enabledModelIds: ['chat-flash'] }],
+    ['/welfare', { action: 'auto', enabled: false }],
+  ]) {
+    const r = await callRoute(find(suffix), { method: 'POST', body })
+    ok(`${failUpdate}: ${JSON.stringify(body)} reports ineffective write`, r.status >= 400 && r.json?.ok === false, JSON.stringify(r.json))
+  }
+  ok(`${failUpdate}: authoritative settings remain unchanged`, JSON.stringify(settings.state.sections.get(SETTINGS_NS_UNDER_TEST)) === JSON.stringify(initial))
+  ok(`${failUpdate}: failed writes do not create shadow settings`, !fs.existsSync(storeFile))
+  await dispose?.()
+}
+
+// Regression: missing fields must not acquire defaults above explicit config,
+// including after a fallback write, claim metadata write, or legacy migration.
+for (const hasSettings of [false, true]) {
+  for (const legacy of [undefined, { welfare: { lastClaimDate: '2026-01-01', lastClaimPoints: 25 } }]) {
+    const config = { providerDisabled: { get: () => true }, enabledModelIds: { get: () => ['chat-pro'] }, toolsAllowlist: { get: () => ['read'] }, autoClaimDaily: { get: () => false } }
+    const { dispose, find, welfare } = await boot({ hasSettings, legacy, config })
+    const check = async (stage, expectedTools = ['read']) => {
+      const r = await callRoute(find('/status'))
+      ok(`${hasSettings}/${!!legacy}/${stage}: explicit provider config survives`, r.json?.provider?.disabled === true)
+      ok(`${hasSettings}/${!!legacy}/${stage}: explicit model config survives`, JSON.stringify(r.json?.models?.filter((m) => m.enabled).map((m) => m.id)) === '["chat-pro"]')
+      ok(`${hasSettings}/${!!legacy}/${stage}: explicit tools config survives`, JSON.stringify(r.json?.toolsAllowlist) === JSON.stringify(expectedTools))
+      ok(`${hasSettings}/${!!legacy}/${stage}: explicit auto config survives`, r.json?.welfare?.autoClaimDaily === false)
+    }
+    await check('initial')
+    await welfare.instance.claim({ source: 'manual' })
+    await check('claim metadata write')
+    await callRoute(find('/tools'), { method: 'POST', body: { toolsAllowlist: ['bash'] } })
+    await check('unrelated setting write', ['bash'])
+    await dispose?.()
+  }
+}
+
+// Explicit store defaults are user choices and must still override config.
+{
+  const { dispose, find } = await boot({
+    hasSettings: false,
+    legacy: { providerDisabled: false, enabledModelIds: [], toolsAllowlist: null, welfare: { autoClaimDaily: true } },
+    config: { providerDisabled: true, enabledModelIds: ['chat-pro'], toolsAllowlist: ['read'], autoClaimDaily: false },
+  })
+  const r = await callRoute(find('/status'))
+  ok('explicit store false overrides config true', r.json?.provider?.disabled === false)
+  ok('explicit store [] overrides configured model subset', r.json?.models?.every((m) => m.enabled))
+  ok('explicit store null restores all tools above config', r.json?.toolsAllowlist === null)
+  ok('explicit store auto true overrides config false', r.json?.welfare?.autoClaimDaily === true)
+  await dispose?.()
+}
+
+// Regression: settings controls the real scheduler, not merely /status.
+for (const [stored, enabled] of [[true, false], [false, true]]) {
+  const { dispose, find, settings, welfare, storeFile } = await boot({
+    legacy: { welfare: { autoClaimDaily: stored, lastClaimDate: '2026-01-01', lastClaimPoints: 25, lastClaimOk: true } },
+    settingsInitial: { toolsAllowlist: ['read'], autoClaimDaily: enabled },
+  })
+  await welfare.instance.prime()
+  ok(`scheduler settings=${enabled} overrides store=${stored}`, welfare.claimCalls === (enabled ? 1 : 0), `claims=${welfare.claimCalls}`)
+  const r = await callRoute(find('/welfare'))
+  ok('welfare GET agrees with effective settings', r.json?.autoClaimDaily === enabled)
+  if (!enabled) {
+    // Native settings updates must be visible without restarting the plugin.
+    settings.state.sections.get(SETTINGS_NS_UNDER_TEST).autoClaimDaily = true
+    await welfare.instance.prime()
+    ok('native settings enable takes effect on next scheduler tick', welfare.claimCalls === 1)
+  }
+  ok('claim metadata writes preserve stored auto preference', JSON.parse(fs.readFileSync(storeFile, 'utf8')).welfare.autoClaimDaily === stored)
+  await dispose?.()
+}
+
+// Schema normalization synthesizes top-level autoClaimDaily=true even when a
+// legacy profile explicitly disables it under welfare. Preserve that opt-out
+// unless a higher-priority saved preference deliberately enables claiming.
+for (const fixture of [
+  { name: 'legacy opt-out without settings', hasSettings: false, config: { welfare: { autoClaimDaily: false } }, enabled: false },
+  { name: 'legacy opt-out with empty settings', config: { welfare: { autoClaimDaily: false } }, enabled: false },
+  { name: 'saved store enable overrides legacy opt-out', hasSettings: false, legacy: { welfare: { autoClaimDaily: true } }, config: { welfare: { autoClaimDaily: false } }, enabled: true },
+  { name: 'saved settings enable overrides legacy opt-out', settingsInitial: { autoClaimDaily: true }, config: { welfare: { autoClaimDaily: false } }, enabled: true },
+  { name: 'top-level opt-out overrides legacy enable', config: { autoClaimDaily: false, welfare: { autoClaimDaily: true } }, enabled: false },
+  { name: 'default remains enabled', config: {}, enabled: true },
+]) {
+  const { dispose, find, welfare } = await boot({ ...fixture, normalizeConfig: true })
+  await welfare.instance.prime()
+  ok(`${fixture.name}: schema-normalized scheduler agrees`, welfare.claimCalls === (fixture.enabled ? 1 : 0), `claims=${welfare.claimCalls}`)
+  const status = await callRoute(find('/status'))
+  ok(`${fixture.name}: status agrees`, status.json?.welfare?.autoClaimDaily === fixture.enabled)
+  const current = await callRoute(find('/welfare'))
+  ok(`${fixture.name}: welfare endpoint agrees`, current.json?.autoClaimDaily === fixture.enabled)
+  await dispose?.()
+}
+
 // ================================================================ 输出
 console.log('\n设置统一到 DSH settings（Host 集成）')
 console.log('─'.repeat(64))
@@ -314,5 +437,6 @@ console.log(`  断言：${report.length - failed.length}/${report.length} 通过
 await new Promise((r) => setTimeout(r, 300))
 try { fs.rmSync(ISOLATED_HOME, { recursive: true, force: true }) } catch { /* ignore */ }
 
+fs.rmSync(ROOT, { recursive: true, force: true })
 console.log(failed.length ? `  红：${failed.length} 项失败` : '  绿：全部通过')
 process.exit(failed.length ? 1 : 0)
