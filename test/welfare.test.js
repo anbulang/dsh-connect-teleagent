@@ -364,3 +364,51 @@ test('ensureFresh: 每日领取状态也会按 TTL 刷新（今日可领要准�
   await w.ensureFresh()
   assert.equal(portal.state.statusCalls, statusCalls, 'TTL 内不重复查领取状态')
 })
+
+// Catch stale store/config reads and snapshots that disagree with the scheduler.
+test('scheduler reads the live effective auto-claim preference without persisting it', async () => {
+  let enabled = false
+  const portal = fakePortal()
+  const store = memStore({ welfare: { autoClaimDaily: true, lastClaimDate: '2026-01-01', lastClaimPoints: 25, futureMetadata: 'keep' } })
+  const w = createWelfare({
+    getAuth: async () => ({ userId: 'u' }), store, portal,
+    now: () => new Date('2026-10-27T10:00:00'),
+    getAutoClaimDaily: () => enabled,
+  }, { autoClaimDaily: false })
+  await w.prime()
+  assert.equal(portal.state.claimCalls, 0)
+  assert.equal(w.snapshot().autoClaimDaily, false)
+  enabled = true
+  await w.prime()
+  assert.equal(portal.state.claimCalls, 1, 'effective preference overrides stale store and startup config')
+  assert.equal(w.snapshot().autoClaimDaily, true)
+  assert.equal(store.dump().welfare.autoClaimDaily, true)
+  assert.equal(store.dump().welfare.futureMetadata, 'keep')
+})
+
+test('manual claim metadata does not invent an automatic-claim preference', async () => {
+  const store = memStore({ welfare: { lastClaimPoints: 25, futureMetadata: 'keep' } })
+  const w = makeWelfare({ portal: fakePortal(), store })
+  await w.claim({ source: 'manual' })
+  assert.equal(Object.hasOwn(store.dump().welfare, 'autoClaimDaily'), false)
+  assert.equal(store.dump().welfare.futureMetadata, 'keep')
+  assert.equal(store.dump().welfare.lastClaimPoints, 100)
+})
+
+test('turning auto-claim off during a pending refresh prevents the automatic claim', async () => {
+  let enabled = true
+  let release
+  const pending = new Promise((resolve) => { release = resolve })
+  const portal = fakePortal()
+  const fetchStatus = portal.fetchDailyStatus
+  portal.fetchDailyStatus = async () => { await pending; return fetchStatus() }
+  const w = createWelfare({
+    getAuth: async () => ({ userId: 'u' }), store: memStore(), portal,
+    getAutoClaimDaily: () => enabled,
+  })
+  const tick = w.prime()
+  enabled = false
+  release()
+  await tick
+  assert.equal(portal.state.claimCalls, 0)
+})

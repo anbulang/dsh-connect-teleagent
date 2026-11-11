@@ -19,6 +19,7 @@ import {
   markLegacyMigrated,
   isLegacyMigrated,
   readStore,
+  writeStore,
   storePath,
   STORE_FILENAME,
 } from '../lib/store.js'
@@ -31,14 +32,6 @@ function tmpHome() {
 function seedLegacy(home, value) {
   fs.mkdirSync(path.dirname(storePath(home)), { recursive: true })
   fs.writeFileSync(storePath(home), typeof value === 'string' ? value : JSON.stringify(value), 'utf8')
-}
-
-/** settings 侧默认值（全空） */
-const EMPTY_SETTINGS = {
-  providerDisabled: false,
-  enabledModelIds: [],
-  toolsAllowlist: [],
-  autoClaimDaily: true,
 }
 
 /** 构造一个记录写入内容的 writeSettings */
@@ -109,16 +102,43 @@ test('migrateLegacyToSettings: legacy 损坏/缺失（null）→ 不迁移且不
   }
 })
 
-test('migrateLegacyToSettings: legacy 什么都没写 → 用默认值补齐四个字段', async () => {
-  // 真实场景：旧文件里只有 welfare 的运行态数据，没有卡片四项
-  const legacy = readLegacyStoreFromObject({
-    welfare: { lastClaimDate: '2026-01-01', lastClaimPoints: 30 },
-  })
+test('migrateLegacyToSettings: claim metadata alone must not mask explicit config with defaults', async () => {
+  const legacy = readLegacyStoreFromObject({ welfare: { lastClaimDate: '2026-01-01', lastClaimPoints: 30 } })
   const { calls, writeSettings } = recorder()
   const result = await migrateLegacyToSettings({ legacy, isSettingsEmpty: true, writeSettings })
+  assert.equal(result.migrated, false)
+  assert.equal(calls.length, 0, 'runtime metadata is not a user configuration choice')
+})
 
+test('migrateLegacyToSettings: only fields actually stored are migrated', async () => {
+  const legacy = readLegacyStoreFromObject({ enabledModelIds: ['chat-pro'] })
+  const { calls, writeSettings } = recorder()
+  const result = await migrateLegacyToSettings({ legacy, isSettingsEmpty: true, writeSettings })
   assert.equal(result.migrated, true)
-  assert.deepEqual(calls[0], EMPTY_SETTINGS, '缺失字段应落成默认值，而不是 key 缺失')
+  assert.deepEqual(result.fields, ['enabledModelIds'])
+  assert.deepEqual(calls, [{ enabledModelIds: ['chat-pro'] }])
+})
+
+test('readStore: presence-aware reads do not invent absent settings', () => {
+  const home = tmpHome()
+  try {
+    assert.deepEqual(readStore(home, { defaults: false }), {})
+    seedLegacy(home, { welfare: { lastClaimPoints: 25 } })
+    assert.deepEqual(readStore(home, { defaults: false }), { welfare: { lastClaimPoints: 25 } })
+  } finally { fs.rmSync(home, { recursive: true, force: true }) }
+})
+
+test('writeStore: partial writes preserve absence and previous claim metadata', () => {
+  const home = tmpHome()
+  try {
+    seedLegacy(home, { welfare: { lastClaimDate: '2026-01-01', lastClaimPoints: 25 } })
+    writeStore({ toolsAllowlist: ['bash'] }, home)
+    writeStore({ welfare: { autoClaimDaily: false } }, home)
+    assert.deepEqual(JSON.parse(fs.readFileSync(storePath(home), 'utf8')), {
+      version: 1, toolsAllowlist: ['bash'],
+      welfare: { lastClaimDate: '2026-01-01', lastClaimPoints: 25, autoClaimDaily: false },
+    })
+  } finally { fs.rmSync(home, { recursive: true, force: true }) }
 })
 
 test('migrateLegacyToSettings: null toolsAllowlist → settings 里是 []（语义保持全发）', async () => {
@@ -241,7 +261,7 @@ test('migrateLegacyToSettings: 兼容 (key, value) 两参写入函数', async ()
 test('migrateLegacyToSettings: 两参写入函数中某个 key 失败 → write-failed', async () => {
   const legacy = readLegacyStoreFromObject({ enabledModelIds: ['chat-pro'] })
   // 声明两个形参才会被识别为 (key, value) 形状
-  const writeSettings = (key, value) => (key !== 'toolsAllowlist' ? value !== undefined : false)
+  const writeSettings = (key, value) => (key !== 'enabledModelIds' ? value !== undefined : false)
   const result = await migrateLegacyToSettings({ legacy, isSettingsEmpty: true, writeSettings })
   assert.equal(result.migrated, false)
   assert.equal(result.reason, 'write-failed')
