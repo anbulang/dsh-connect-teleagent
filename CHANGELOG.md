@@ -6,34 +6,31 @@
 
 ---
 
-## 0.14.0 — 2026-11-11
+## 0.14.1 — 2026-11-11
 
-### 破坏性变更：包名改为 scoped `@anbulang/dsh-connect-teleagent`
+### 回滚：恢复包名 `dsh-connect-teleagent`
 
-**为什么改**：npm 上的 `dsh-connect-teleagent` 已被另一个同名实现占用（`alvin_h` 发布的
-`1.2.6`，仓库 `alvinhuang0509-design/dsh-connect-teleagent`），而插件目录与 DSH 市场索引都按
-**包名**去重。同名意味着两者不能装进同一个 profile、市场索引也无法同时收录。
-改用 scoped 名字后身份唯一，与对方互不冲突。
+0.14.0 把包名改成了 scoped 的 `@anbulang/dsh-connect-teleagent`，目的是解决 npm 上同名
+实现（`alvinhuang0509-design/dsh-connect-teleagent`）造成的目录冲突。**实际结果不可用**：
+本机 DSH 重启后 profile 的 bundle 条目被移除、插件不加载（模型列表里没有 TeleAgent），
+按使用反馈回滚。
 
-**改了什么**
-- `package.json` 的 `name`：`dsh-connect-teleagent` → `@anbulang/dsh-connect-teleagent`；版本 `0.14.0`。
-- `cordis.patch.yml` 的 `name` 换成 scoped 包名；**Loader 条目 id 仍是 `dsh-connect-teleagent`**
-  ——它同时决定 settings 命名空间（`include:dsh-connect-teleagent`），因此**已有设置无需迁移**。
-- CLI 命令名（`dsh-connect-teleagent doctor` / `accounts --add`）、HTTP 路由前缀
-  （`/plugins/dsh-connect-teleagent/...`）、设置 section id 全部保持不变。
-- `scripts/install.sh` / `scripts/uninstall.sh`：按 scoped 包名注册，并自动清理 0.13 及更早的无 scope 依赖键。
-- 离线包文件名随 npm 规则变为 `anbulang-dsh-connect-teleagent-<version>.tgz`。
-- 自托管市场索引 `market/index.json` 同步换成 scoped 包名。
+**本版改动**
+- `package.json` 的 `name` 恢复为 `dsh-connect-teleagent`（版本 0.14.1）。
+- `cordis.patch.yml`、`locale` 的 `meta.title`、安装脚本、README/README_EN、自托管市场索引
+  全部恢复无 scope 名字。
+- Loader 条目 id 始终未变（`dsh-connect-teleagent`），因此设置命名空间不受影响，无需迁移。
+- 仍保留 0.14.0 引入的 `bin` 测试契约修正（npm 的 bin 命令名不能带 `/`）。
 
-**升级方法（已装 ≤0.13 的机器）**
-1. 编辑 `~/.dsh/profiles/desktop/package.json`：把 `dependencies` 的键与 `dsh.profile.bundles`
-   里的 `dsh-connect-teleagent` 改成 `@anbulang/dsh-connect-teleagent`（`file:` 路径不变）。
-2. 在该 profile 里 `pnpm install`；或手工把 `node_modules/dsh-connect-teleagent` 链接换成
-   `node_modules/@anbulang/dsh-connect-teleagent`。
-3. 完全退出并重启 DSH。也可以直接跑仓库里的 `bash scripts/install.sh`（幂等，会顺带迁移）。
-4. 设置项不需要处理：Loader 条目 id 未变，原有 settings 命名空间继续有效。
+**升级/恢复方法（装过 0.14.0 的机器）**
+1. `~/.dsh/profiles/desktop/package.json`：依赖键改回 `dsh-connect-teleagent`，
+   并把该名字加回 `dsh.profile.bundles`。
+2. 把 `node_modules/@anbulang/dsh-connect-teleagent` 链接换回 `node_modules/dsh-connect-teleagent`。
+3. 完全退出并重启 DSH；`bash scripts/install.sh` 可一步完成（幂等，会清理 scoped 旧键）。
 
-除包名外，功能与 0.13.0 相同。
+**关于 npm 同名**：暂不处理。canonical 目录已收录本仓库条目，描述里如实写明与
+`alvinhuang0509-design/dsh-connect-teleagent` 使用相同包名和挂载 id、只能装其一。
+将来若要发布 npm，需要另选唯一包名（或与对方协调），届时再单独评估。
 
 ## 0.13.0 — 2026-11-09
 

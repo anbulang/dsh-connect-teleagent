@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://github.com/anbulang/dsh-connect-teleagent/releases/latest"><img alt="release" src="https://img.shields.io/github/v/release/anbulang/dsh-connect-teleagent?label=release&color=2ea44f"></a>
-  <a href="https://github.com/anbulang/dsh-connect-teleagent/blob/main/package.json"><img alt="version" src="https://img.shields.io/badge/version-0.14.0-blue"></a>
+  <a href="https://github.com/anbulang/dsh-connect-teleagent/blob/main/package.json"><img alt="version" src="https://img.shields.io/badge/version-0.14.1-blue"></a>
   <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-purple"></a>
   <a href="https://github.com/anbulang/dsh-connect-teleagent"><img alt="platform" src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey"></a>
   <a href="https://github.com/anbulang/dsh-connect-teleagent"><img alt="dsh" src="https://img.shields.io/badge/DSH-0.2.1--rc.1%2B-orange"></a>
@@ -72,7 +72,7 @@ Windows 上 TeleAgent 运行时会锁定积分 Cookie 数据库。首次登录�
    https://raw.githubusercontent.com/anbulang/dsh-connect-teleagent/main/market/index.json
    ```
 
-3. 在市场下拉里选择 **TeleAgent 模型**（包名 `@anbulang/dsh-connect-teleagent`），安装后重启 DSH
+3. 在市场下拉里选择 **dsh-connect-teleagent**，安装后重启 DSH
 
 ### 方式 B：包管理器直装
 
@@ -83,12 +83,12 @@ dsh plugin --profile web add github:anbulang/dsh-connect-teleagent
 ### 方式 C：Release 离线包
 
 从 [Releases](https://github.com/anbulang/dsh-connect-teleagent/releases/latest) 下载
-`anbulang-dsh-connect-teleagent-<version>.tgz`（包里只有插件本体，**不含** `scripts/`），解压到
+`dsh-connect-teleagent-<version>.tgz`（包里只有插件本体，**不含** `scripts/`），解压到
 `~/.dsh/plugins/dsh-connect-teleagent/`；macOS 也可以用仓库里的安装脚本：
 
 ```bash
 mkdir -p ~/.dsh/plugins/dsh-connect-teleagent
-tar -xzf anbulang-dsh-connect-teleagent-<version>.tgz --strip-components=1 \
+tar -xzf dsh-connect-teleagent-<version>.tgz --strip-components=1 \
   -C ~/.dsh/plugins/dsh-connect-teleagent      # 去掉 tar 包顶层的 package/ 前缀
 ```
 
@@ -100,13 +100,13 @@ tar -xzf anbulang-dsh-connect-teleagent-<version>.tgz --strip-components=1 \
 ```jsonc
 {
   "dependencies": {
-    "@anbulang/dsh-connect-teleagent": "file:/Users/<你>/.dsh/plugins/dsh-connect-teleagent"
+    "dsh-connect-teleagent": "file:/Users/<你>/.dsh/plugins/dsh-connect-teleagent"
   },
   "dsh": {
     "profile": {
       "bundles": [
         // ……原有的 bundle 保持不动……
-        "@anbulang/dsh-connect-teleagent"          // ← 追加到列表末尾
+        "dsh-connect-teleagent"          // ← 追加到列表末尾
       ]
     }
   }
@@ -114,13 +114,9 @@ tar -xzf anbulang-dsh-connect-teleagent-<version>.tgz --strip-components=1 \
 ```
 
 1. **`dependencies`**：`file:` 指向插件目录的**绝对路径**（用 `~` 也可以，DSH 会展开）。
-2. **`dsh.profile.bundles`**：把**包名**追加进这个有序列表 —— 只有列表里的 bundle 才会被加载；
+2. **`dsh.profile.bundles`**：把包名追加进这个有序列表 —— 只有列表里的 bundle 才会被加载；
    插件自带的 `cordis.patch.yml` 会经 bundle 机制自动生效，**不需要**再在 profile 的
    `cordis.patch.yml` 里手写一条 `- id: dsh-connect-teleagent`。
-
-> 两个名字不要混：**插件身份**是 `@anbulang/dsh-connect-teleagent`（依赖键与 bundle 名）；
-> **Loader 条目 id** 仍是 `dsh-connect-teleagent`，它决定设置命名空间（`include:dsh-connect-teleagent`）。
-> 0.14.0 只改了前者，所以升级后原有设置仍然有效。
 
 改完 `package.json` 后，在该 profile 目录里装一次依赖（Plugins 页在后台做的也是这件事）：
 
@@ -137,7 +133,7 @@ cd ~/.dsh/profiles/desktop && pnpm install
 
 | 漏掉 | 现象 |
 |---|---|
-| `dependencies` | 启动时 stderr 打印 `skipping profile bundle "@anbulang/dsh-connect-teleagent": … cannot resolve profile bundle …`，插件不加载（DSH 仍能启动，所以很容易被忽略） |
+| `dependencies` | 启动时 stderr 打印 `skipping profile bundle "dsh-connect-teleagent": … cannot resolve profile bundle …`，插件不加载（DSH 仍能启动，所以很容易被忽略） |
 | `dsh.profile.bundles` | 包装上了但从不激活 —— 模型列表里同样没有 TeleAgent |
 
 ### 上游 apiKey
@@ -271,7 +267,7 @@ DSH (pi-ai) ──OpenAI──► loopback shim (127.0.0.1:随机端口)
 
 ```yaml
 - id: dsh-connect-teleagent
-  name: '@anbulang/dsh-connect-teleagent'
+  name: dsh-connect-teleagent
   config:
     transport: kernel              # kernel（默认）或 direct
     kernelAllowedTools: []         # 允许内核额外执行的工具（默认空）

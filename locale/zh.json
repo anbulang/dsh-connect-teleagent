@@ -1,6 +1,6 @@
 {
   "meta": {
-    "title": "@anbulang/dsh-connect-teleagent",
+    "title": "dsh-connect-teleagent",
     "description": "把本机已登录的 TeleAgent 桌面端模型接入 DSH：支持真流式、多轮上下文与工具调用，并提供账号状态与模型开关。",
     "detail": "locale/detail.md"
   }

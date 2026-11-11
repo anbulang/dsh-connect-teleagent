@@ -28,7 +28,7 @@
   },
   "plugins": [
     {
-      "name": "@anbulang/dsh-connect-teleagent",
+      "name": "dsh-connect-teleagent",
       "title": {
         "en": "TeleAgent Models",
         "zh": "TeleAgent 模型"
@@ -59,12 +59,12 @@
       },
       "versions": [
         {
-          "version": "0.14.0",
-          "publishTimestamp": 1794363752,
+          "version": "0.13.0",
+          "publishTimestamp": 1794326672,
           "source": {
             "type": "git",
             "url": "https://github.com/anbulang/dsh-connect-teleagent",
-            "commit": "f7210e4913bb1a35fb5245b2372e20dd8f9f5ee3"
+            "commit": "84b541e173b436a88b20bed5e171033b1172b34d"
           },
           "engines": {
             "dsh": ">=0.2.1-rc.1 <0.3.0-0"
