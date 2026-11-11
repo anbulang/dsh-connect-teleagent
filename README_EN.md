@@ -1,11 +1,11 @@
 <p align="center">
   <a href="https://github.com/anbulang/dsh-connect-teleagent/releases/latest"><img alt="release" src="https://img.shields.io/github/v/release/anbulang/dsh-connect-teleagent?label=release&color=2ea44f"></a>
-  <a href="https://github.com/anbulang/dsh-connect-teleagent/blob/main/package.json"><img alt="version" src="https://img.shields.io/badge/version-0.12.0-blue"></a>
+  <a href="https://github.com/anbulang/dsh-connect-teleagent/blob/main/package.json"><img alt="version" src="https://img.shields.io/badge/version-0.14.0-blue"></a>
   <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-purple"></a>
   <a href="https://github.com/anbulang/dsh-connect-teleagent"><img alt="platform" src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey"></a>
   <a href="https://github.com/anbulang/dsh-connect-teleagent"><img alt="dsh" src="https://img.shields.io/badge/DSH-0.2.1--rc.1%2B-orange"></a>
   <a href="https://github.com/anbulang/dsh-connect-teleagent"><img alt="index" src="https://img.shields.io/badge/index-format--1-blueviolet"></a>
-  <a href="https://github.com/anbulang/dsh-connect-teleagent"><img alt="tests" src="https://img.shields.io/badge/tests-262%20passing-brightgreen"></a>
+  <a href="https://github.com/anbulang/dsh-connect-teleagent"><img alt="tests" src="https://img.shields.io/badge/tests-402%20passing-brightgreen"></a>
   <a href="https://github.com/anbulang/dsh-connect-teleagent/stargazers"><img alt="stars" src="https://img.shields.io/github/stars/anbulang/dsh-connect-teleagent?style=social"></a>
 </p>
 
@@ -72,7 +72,7 @@ On Windows, TeleAgent locks its points cookie database while running. After sign
    https://raw.githubusercontent.com/anbulang/dsh-connect-teleagent/main/market/index.json
    ```
 
-3. Pick **dsh-connect-teleagent**, install and restart DSH
+3. Pick **TeleAgent Models** (package `@anbulang/dsh-connect-teleagent`), install and restart DSH
 
 ### B. Package manager
 
@@ -82,14 +82,14 @@ dsh plugin --profile web add github:anbulang/dsh-connect-teleagent
 
 ### C. Release tarball
 
-Download `dsh-connect-teleagent-<version>.tgz` from
+Download `anbulang-dsh-connect-teleagent-<version>.tgz` from
 [Releases](https://github.com/anbulang/dsh-connect-teleagent/releases/latest) (the archive holds
 the plugin only — it does **not** ship `scripts/`) and unpack it into
 `~/.dsh/plugins/dsh-connect-teleagent/`. On macOS you can also use the bundled scripts:
 
 ```bash
 mkdir -p ~/.dsh/plugins/dsh-connect-teleagent
-tar -xzf dsh-connect-teleagent-<version>.tgz --strip-components=1 \
+tar -xzf anbulang-dsh-connect-teleagent-<version>.tgz --strip-components=1 \
   -C ~/.dsh/plugins/dsh-connect-teleagent      # strip the archive's top-level package/ prefix
 ```
 
@@ -102,13 +102,13 @@ and it copies and registers in one go). To do it by hand, edit
 ```jsonc
 {
   "dependencies": {
-    "dsh-connect-teleagent": "file:/Users/<you>/.dsh/plugins/dsh-connect-teleagent"
+    "@anbulang/dsh-connect-teleagent": "file:/Users/<you>/.dsh/plugins/dsh-connect-teleagent"
   },
   "dsh": {
     "profile": {
       "bundles": [
         // …leave the existing bundles untouched…
-        "dsh-connect-teleagent"          // ← append to the end of the list
+        "@anbulang/dsh-connect-teleagent"          // ← append to the end of the list
       ]
     }
   }
@@ -117,10 +117,15 @@ and it copies and registers in one go). To do it by hand, edit
 
 1. **`dependencies`** — a `file:` spec pointing at the plugin directory (an absolute path;
    `~` is expanded too).
-2. **`dsh.profile.bundles`** — append the package name to this ordered list; only bundles listed
+2. **`dsh.profile.bundles`** — append the **package name** to this ordered list; only bundles listed
    there are loaded. The plugin's own `cordis.patch.yml` takes effect through the bundle
    mechanism, so you do **not** need to hand-write `- id: dsh-connect-teleagent` in the profile's
    `cordis.patch.yml`.
+
+> Two different names: the **plugin identity** is `@anbulang/dsh-connect-teleagent` (dependency key
+> and bundle name); the **Loader entry id** stays `dsh-connect-teleagent`, which decides the settings
+> namespace (`include:dsh-connect-teleagent`). 0.14.0 only changed the former, so upgrading keeps
+> your existing settings.
 
 Then install the profile dependencies inside the profile directory (this is what the Plugins page
 does in the background):
@@ -139,7 +144,7 @@ Skipping either step fails differently — "the directory exists" is not evidenc
 
 | Missing | Symptom |
 |---|---|
-| `dependencies` | stderr prints `skipping profile bundle "dsh-connect-teleagent": … cannot resolve profile bundle …` at startup and the plugin never loads (DSH still boots, so it is easy to miss) |
+| `dependencies` | stderr prints `skipping profile bundle "@anbulang/dsh-connect-teleagent": … cannot resolve profile bundle …` at startup and the plugin never loads (DSH still boots, so it is easy to miss) |
 | `dsh.profile.bundles` | the package is installed but never activated — the model list still has no TeleAgent |
 
 ### Upstream apiKey
@@ -274,7 +279,7 @@ Edit `~/.dsh/profiles/desktop/cordis.patch.yml`:
 
 ```yaml
 - id: dsh-connect-teleagent
-  name: dsh-connect-teleagent
+  name: '@anbulang/dsh-connect-teleagent'
   config:
     transport: kernel              # kernel (default) or direct
     kernelAllowedTools: []         # extra tools the kernel may execute (empty by default)

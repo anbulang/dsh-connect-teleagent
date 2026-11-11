@@ -28,7 +28,7 @@
   },
   "plugins": [
     {
-      "name": "dsh-connect-teleagent",
+      "name": "@anbulang/dsh-connect-teleagent",
       "title": {
         "en": "TeleAgent Models",
         "zh": "TeleAgent 模型"

@@ -1,6 +1,6 @@
 {
   "meta": {
-    "title": "dsh-connect-teleagent",
+    "title": "@anbulang/dsh-connect-teleagent",
     "description": "Bring the locally signed-in TeleAgent models into DSH: real streaming, multi-turn context and tool calls, with an account panel and per-model switches.",
     "detail": "locale/detail.md"
   }

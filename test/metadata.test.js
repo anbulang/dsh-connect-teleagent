@@ -86,7 +86,13 @@ test('files 清单包含运行所需目录与文档', () => {
 })
 
 test('bin 指向存在的多子命令入口', () => {
-  const bin = pkg.bin[pkg.name]
-  assert.ok(typeof bin === 'string', 'bin 未配置')
-  assert.ok(fs.existsSync(path.join(root, bin)), `bin 指向的文件不存在: ${bin}`)
+  // 包名是 scoped（`@anbulang/dsh-connect-teleagent`），但 npm 的 bin 命令名里不能带 `/`，
+  // 所以命令名固定为无 scope 的 `dsh-connect-teleagent` —— README 里的 CLI 示例也用它。
+  const entries = Object.entries(pkg.bin ?? {})
+  assert.ok(entries.length > 0, 'bin 未配置')
+  assert.equal(typeof pkg.bin['dsh-connect-teleagent'], 'string', 'CLI 命令名 dsh-connect-teleagent 不应被改动')
+  for (const [name, file] of entries) {
+    assert.ok(!name.includes('/'), `bin 命令名不能带 /：${name}`)
+    assert.ok(fs.existsSync(path.join(root, file)), `bin 指向的文件不存在: ${file}`)
+  }
 })

@@ -6,6 +6,35 @@
 
 ---
 
+## 0.14.0 — 2026-11-11
+
+### 破坏性变更：包名改为 scoped `@anbulang/dsh-connect-teleagent`
+
+**为什么改**：npm 上的 `dsh-connect-teleagent` 已被另一个同名实现占用（`alvin_h` 发布的
+`1.2.6`，仓库 `alvinhuang0509-design/dsh-connect-teleagent`），而插件目录与 DSH 市场索引都按
+**包名**去重。同名意味着两者不能装进同一个 profile、市场索引也无法同时收录。
+改用 scoped 名字后身份唯一，与对方互不冲突。
+
+**改了什么**
+- `package.json` 的 `name`：`dsh-connect-teleagent` → `@anbulang/dsh-connect-teleagent`；版本 `0.14.0`。
+- `cordis.patch.yml` 的 `name` 换成 scoped 包名；**Loader 条目 id 仍是 `dsh-connect-teleagent`**
+  ——它同时决定 settings 命名空间（`include:dsh-connect-teleagent`），因此**已有设置无需迁移**。
+- CLI 命令名（`dsh-connect-teleagent doctor` / `accounts --add`）、HTTP 路由前缀
+  （`/plugins/dsh-connect-teleagent/...`）、设置 section id 全部保持不变。
+- `scripts/install.sh` / `scripts/uninstall.sh`：按 scoped 包名注册，并自动清理 0.13 及更早的无 scope 依赖键。
+- 离线包文件名随 npm 规则变为 `anbulang-dsh-connect-teleagent-<version>.tgz`。
+- 自托管市场索引 `market/index.json` 同步换成 scoped 包名。
+
+**升级方法（已装 ≤0.13 的机器）**
+1. 编辑 `~/.dsh/profiles/desktop/package.json`：把 `dependencies` 的键与 `dsh.profile.bundles`
+   里的 `dsh-connect-teleagent` 改成 `@anbulang/dsh-connect-teleagent`（`file:` 路径不变）。
+2. 在该 profile 里 `pnpm install`；或手工把 `node_modules/dsh-connect-teleagent` 链接换成
+   `node_modules/@anbulang/dsh-connect-teleagent`。
+3. 完全退出并重启 DSH。也可以直接跑仓库里的 `bash scripts/install.sh`（幂等，会顺带迁移）。
+4. 设置项不需要处理：Loader 条目 id 未变，原有 settings 命名空间继续有效。
+
+除包名外，功能与 0.13.0 相同。
+
 ## 0.13.0 — 2026-11-09
 
 ### feature：设置统一到 DSH 原生设置（对齐 `dsh-connect-workbuddy@5.21.2`）

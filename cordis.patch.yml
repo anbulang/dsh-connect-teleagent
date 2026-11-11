@@ -1,5 +1,7 @@
 # 注册 TeleAgent provider，不改变 profile 的默认模型。
 # 插件复用 TeleAgent 桌面端已有的登录态，不再单独走 OAuth。
 - insert:
+    # id 是 Loader 条目 id，同时决定 settings 命名空间 —— 改名时刻意保持不变，
+    # 这样已装旧版的用户不需要迁移设置。name 才是可解析的包名。
     - id: dsh-connect-teleagent
-      name: dsh-connect-teleagent
+      name: '@anbulang/dsh-connect-teleagent'
